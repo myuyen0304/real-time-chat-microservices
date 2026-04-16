@@ -1,0 +1,73 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  user-service:
+    build: ./backend/user
+    ports:
+      - "5000:5000"
+    env_file: ./backend/user/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+      - MONGO_DB_NAME=chat_user_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mail-service:
+    build: ./backend/mail
+    env_file: ./backend/mail/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  chat-service:
+    build: ./backend/chat
+    ports:
+      - "5002:5002"
+    env_file: ./backend/chat/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=guest
+      - Rabbitmq_Password=guest
+      - MONGO_DB_NAME=chat_chat_service
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - user-service
+      - chat-service
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - gateway

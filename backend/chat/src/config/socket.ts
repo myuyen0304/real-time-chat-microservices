@@ -1,80 +1,87 @@
 import { Server, Socket } from "socket.io";
-import http from 'http';
-import express from 'express';
-import { error } from "console";
+import { createAdapter } from "@socket.io/redis-adapter";
+import { createClient } from "redis";
+import http from "http";
+import express from "express";
 
 const app = express();
-
 const server = http.createServer(app);
 
-const io = new Server(server,{
-    cors:{
-        origin: "*",
-        methods: ["GET", "POST"],
-    },
+const io = new Server(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"],
+  },
 });
 
-const userSocketMap: Record<string, string> = {};
+const pubClient = createClient({ url: process.env.REDIS_URL as string });
+const subClient = pubClient.duplicate();
 
-export const getReceiverSocketId = (receiverId: string): string | undefined =>{
-    return userSocketMap[receiverId];
+Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
+  io.adapter(createAdapter(pubClient, subClient));
+  console.log("Socket.IO Redis adapter connected");
+});
+
+export const getReceiverSocketId = async (
+  receiverId: string,
+): Promise<string | undefined> => {
+  const socketId = await pubClient.get(`socket:user:${receiverId}`);
+  return socketId ?? undefined;
 };
 
-io.on("connection", (socket: Socket) =>{
-    console.log("User Connected", socket.id);
+io.on("connection", async (socket: Socket) => {
+  console.log("User Connected", socket.id);
 
-    const userId = socket.handshake.query.userId as string | undefined;
+  const userId = socket.handshake.query.userId as string | undefined;
 
-    if(userId && userId !== "undefined"){
-        userSocketMap[userId] = socket.id;
-        console.log(`User ${userId} mapped to socket ${socket.id}`);
+  if (userId && userId !== "undefined") {
+    await pubClient.set(`socket:user:${userId}`, socket.id);
+    console.log(`User ${userId} mapped to socket ${socket.id}`);
+  }
+
+  const onlineUserIds: string[] = await pubClient.keys("socket:user:*");
+  const onlineUsers = onlineUserIds.map((key) =>
+    key.replace("socket:user:", ""),
+  );
+  io.emit("getOnlineUser", onlineUsers);
+
+  if (userId) {
+    socket.join(userId);
+  }
+
+  socket.on("typing", (data) => {
+    socket.to(data.chatId).emit("userTyping", {
+      chatId: data.chatId,
+      userId: data.userId,
+    });
+  });
+
+  socket.on("stopTyping", (data) => {
+    socket.to(data.chatId).emit("userStoppedTyping", {
+      chatId: data.chatId,
+      userId: data.userId,
+    });
+  });
+
+  socket.on("joinChat", (chatId) => {
+    socket.join(chatId);
+  });
+
+  socket.on("leaveChat", (chatId) => {
+    socket.leave(chatId);
+  });
+
+  socket.on("disconnect", async () => {
+    console.log("User Disconnected", socket.id);
+    if (userId) {
+      await pubClient.del(`socket:user:${userId}`);
+      const onlineUserIds: string[] = await pubClient.keys("socket:user:*");
+      const onlineUsers = onlineUserIds.map((key) =>
+        key.replace("socket:user:", ""),
+      );
+      io.emit("getOnlineUser", onlineUsers);
     }
-
-    io.emit("getOnlineUser", Object.keys(userSocketMap));
-
-    if(userId){
-        socket.join(userId);
-    }
-
-    socket.on("typing", (data)=>{
-        console.log(`User ${data.userId} is typing in chat ${data.chatId}`);
-        socket.to(data.chatId).emit("userTyping",{
-            chatId: data.chatId,
-            userId: data.userId
-        });
-    })
-
-    socket.on("stopTyping", (data)=>{
-        console.log(`User ${data.userId} stopped in chat room ${data.chatId}`);
-        socket.to(data.chatId).emit("userStoppedTyping",{
-            chatId: data.chatId,
-            userId: data.userId
-        });
-    });
-
-    socket.on("joinChat", (chatId)=>{
-        socket.join(chatId);
-        console.log(`User ${userId} stopped in chat room ${chatId}`);
-       
-    })
-    socket.on("leaveChat", (chatId)=>{
-        socket.leave(chatId);
-        console.log(`User ${userId} left in chat rom ${chatId}`);
-    })
-    socket.on("disconnect", ()=>{
-        console.log("User Disconneted", socket.id);
-
-        if(userId){
-            delete userSocketMap[userId];
-            console.log(`User ${userId} removed from online users`);
-            io.emit("getOnlineUser", Object.keys(userSocketMap));
-        }
-    });
-
-    socket.on("connect_error", (error)=>{
-        console.log("Socket connect Error", error);
-    });
+  });
 });
 
-
-export {app, server, io};
+export { app, server, io };

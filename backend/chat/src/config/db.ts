@@ -1,20 +1,31 @@
 import mongoose from "mongoose";
 
-const connectDB = async() => {
-    const url = process.env.MONGO_URI;
+const DEFAULT_DB_NAME = "ChatappMicroservice";
+const SERVICE_NAME = "chat-service";
 
-    if(!url){
-        throw new Error("MONGO_URI is not defined in env variables");
+const connectDB = async () => {
+  const url = process.env.MONGO_URI;
+  const dbName = process.env.MONGO_DB_NAME || DEFAULT_DB_NAME;
+
+  if (!url) {
+    throw new Error("MONGO_URI is not defined in env variables");
+  }
+  try {
+    await mongoose.connect(url, {
+      dbName,
+    });
+    if (!process.env.MONGO_DB_NAME) {
+      console.warn(
+        `[${SERVICE_NAME}] MONGO_DB_NAME is not set. Falling back to ${DEFAULT_DB_NAME}.`,
+      );
     }
-    try {
-        await mongoose.connect(url, {
-            dbName: "ChatappMicroservice"
-        });
-        console.log("Connected to Mongodb")
-    } catch (error) {
-        console.error("Failed to connect to Mongodb", error);
-        process.exit(1);
-    }
+    console.log(
+      `[${SERVICE_NAME}] Connected to MongoDB database \"${dbName}\"`,
+    );
+  } catch (error) {
+    console.error(`[${SERVICE_NAME}] Failed to connect to MongoDB`, error);
+    process.exit(1);
+  }
 };
 
 export default connectDB;
