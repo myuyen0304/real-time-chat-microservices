@@ -28,7 +28,7 @@ const ProfilePage = () => {
           headers: {
             Authorization: `Bearer ${token}`,
           },
-        }
+        },
       );
 
       Cookies.set("token", data.token, {
@@ -40,7 +40,7 @@ const ProfilePage = () => {
       setUser(data.user);
       setIsEdit(false);
     } catch (error: any) {
-      toast.error(error.response.data.message);
+      toast.error(error?.response?.data?.message || "Failed to update profile");
     }
   };
 
@@ -78,7 +78,7 @@ const ProfilePage = () => {
                 <div className="w-20 h-20 rounded-full bg-gray-600 flex items-center justify-center">
                   <UserCircle className=" w-12 h-12 text-gray-300" />
                 </div>
-                <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 rounded-full border-2 border border-gray-800"></div>
+                <div className="absolute -bottom-1 -right-1 w-6 h-6 bg-green-500 rounded-full border-2 border-gray-800"></div>
               </div>
               <div className="flex-1 ">
                 <h2 className="text-2xl font-bold text-white mb-1">
