@@ -6,6 +6,9 @@ dotenv.config()
 starSendOtpConsumer();
 
 const app = express();
+app.use(express.json());
+
+app.get("/health", (_req, res) => res.json({ status: "ok", service: "mail" }));
 
 const port = process.env.PORT;
 
