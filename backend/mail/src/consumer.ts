@@ -1,54 +1,52 @@
 import amqp from "amqplib";
 import nodemailer from "nodemailer";
-import dotenv from "dotenv";
+import { mailEnv } from "./config/env.js";
 
+export const starSendOtpConsumer = async () => {
+  try {
+    const connection = await amqp.connect({
+      protocol: "amqp",
+      hostname: mailEnv.Rabbitmq_Host,
+      port: 5672,
+      username: mailEnv.Rabbitmq_Username,
+      password: mailEnv.Rabbitmq_Password,
+    });
+    const channel = await connection.createChannel();
+    const queueName = "send-otp";
 
-dotenv.config();
+    await channel.assertQueue(queueName, { durable: true });
 
-export const starSendOtpConsumer = async() =>{
-    try {
-        const connection = await amqp.connect({
-            protocol: "amqp",
-            hostname: process.env.Rabbitmq_Host,
-            port: 5672,
-            username: process.env.Rabbitmq_Username,
-            password: process.env.Rabbitmq_Password
-        });
-        const channel = await connection.createChannel();
-        const queueName = "send-otp";
+    console.log("Mail service consumer started, listening for otp emails");
 
-        await channel.assertQueue(queueName, {durable: true});
+    channel.consume(queueName, async (msg) => {
+      if (msg) {
+        try {
+          const { to, subject, body } = JSON.parse(msg.content.toString());
 
-        console.log("Mail service consumer started, listening for otp emails");
-
-        channel.consume(queueName, async(msg) =>{
-            if(msg){
-                try {
-                    const {to, subject, body} = JSON.parse(msg.content.toString());
-
-                    const transporter = nodemailer.createTransport({
-                        host: "smtp.gmail.com",
-                        port: 465,
-                        auth: {
-                            user: process.env.EMAIL_USER,
-                            pass: process.env.EMAIL_PASSWORD,
-                        },
-                    });
-                    await transporter.sendMail({
-                        from: "Chat app",
-                        to,
-                        subject,
-                        text: body,
-                    });
-                    console.log(`OTP mail sent to ${to}`);
-                    channel.ack(msg);
-
-                } catch (error) {
-                    console.error("Failed to send otp", error);
-                }
-            }
-        });
-    } catch (error) {
-        console.error("Fail to start rabbitmq consumer", error);
-    }
-}
+          const transporter = nodemailer.createTransport({
+            host: mailEnv.EMAIL_HOST,
+            port: mailEnv.EMAIL_PORT,
+            secure: mailEnv.EMAIL_PORT === 465,
+            auth: {
+              user: mailEnv.EMAIL_USER,
+              pass: mailEnv.EMAIL_PASSWORD,
+            },
+          });
+          await transporter.sendMail({
+            from: "Chat app",
+            to,
+            subject,
+            text: body,
+          });
+          console.log(`OTP mail sent to ${to}`);
+          channel.ack(msg);
+        } catch (error) {
+          console.error("Failed to send otp", error);
+        }
+      }
+    });
+  } catch (error) {
+    console.error("Fail to start rabbitmq consumer", error);
+    throw error;
+  }
+};
