@@ -62,10 +62,24 @@ const ChatApp = () => {
     }
   }, [isAuth, router, loading]);
 
-  const handleLogout = () => logoutUser();
+  const handleLogout = () => {
+    setSelectedUser(null);
+    setMessages(null);
+    setUser(null);
+    setIsTyping(false);
+    setShowAllUser(false);
+    setSiderbarOpen(false);
+    void logoutUser();
+    router.replace("/login");
+  };
 
   async function fetchChat() {
     const token = Cookies.get("token");
+
+    if (!selectedUser || !token || !isAuth) {
+      return;
+    }
+
     try {
       const { data } = await axios.get(
         `${chat_service}/api/v1/message/${selectedUser}`,
@@ -346,22 +360,29 @@ const ChatApp = () => {
 
   useEffect(() => {
     const loadChat = async () => {
-      if (selectedUser) {
-        await fetchChat();
+      if (!selectedUser || !isAuth) {
+        setMessages(null);
+        setUser(null);
         setIsTyping(false);
+        return;
+      }
 
-        resetUnseenCount(selectedUser);
+      await fetchChat();
+      setIsTyping(false);
 
-        socket?.emit("joinChat", selectedUser);
+      resetUnseenCount(selectedUser);
 
-        return () => {
-          socket?.emit("leaveChat", selectedUser);
-          setMessages(null);
-        };
+      socket?.emit("joinChat", selectedUser);
+    };
+
+    loadChat();
+
+    return () => {
+      if (selectedUser) {
+        socket?.emit("leaveChat", selectedUser);
       }
     };
-    loadChat();
-  }, [selectedUser, socket]);
+  }, [selectedUser, socket, isAuth]);
 
   useEffect(() => {
     return () => {
