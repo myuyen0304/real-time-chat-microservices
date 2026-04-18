@@ -1,14 +1,15 @@
 import amqp from "amqplib";
 import { UserSnapshot } from "../model/UserSnapshot.js";
+import { chatEnv } from "./env.js";
 
 export const startUserEventsConsumer = async () => {
   try {
     const connection = await amqp.connect({
       protocol: "amqp",
-      hostname: process.env.Rabbitmq_Host,
+      hostname: chatEnv.Rabbitmq_Host,
       port: 5672,
-      username: process.env.Rabbitmq_Username,
-      password: process.env.Rabbitmq_Password,
+      username: chatEnv.Rabbitmq_Username,
+      password: chatEnv.Rabbitmq_Password,
     });
 
     const channel = await connection.createChannel();
@@ -24,7 +25,7 @@ export const startUserEventsConsumer = async () => {
           await UserSnapshot.findByIdAndUpdate(
             payload._id,
             { name: payload.name, email: payload.email },
-            { upsert: true, new: true }
+            { upsert: true, new: true },
           );
           console.log(`UserSnapshot synced: ${payload.email}`);
         }
@@ -36,5 +37,6 @@ export const startUserEventsConsumer = async () => {
     });
   } catch (error) {
     console.error("Failed to start user events consumer", error);
+    throw error;
   }
 };
