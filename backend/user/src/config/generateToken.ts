@@ -1,9 +1,12 @@
 import jwt from "jsonwebtoken";
+import { userEnv } from "./env.js";
 
 export const generateToken = (user: any) => {
-  const privateKey = (process.env.JWT_PRIVATE_KEY as string).replace(/\\n/g, "\n");
-  return jwt.sign({ user }, privateKey, {
+  return jwt.sign({ user }, userEnv.JWT_PRIVATE_KEY, {
     algorithm: "RS256",
     expiresIn: "15d",
+    issuer: userEnv.JWT_ISSUER,
+    audience: userEnv.JWT_AUDIENCE,
+    subject: user._id?.toString?.() ?? String(user._id),
   });
 };
