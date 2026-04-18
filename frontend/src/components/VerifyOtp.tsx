@@ -47,7 +47,7 @@ const VerifyOtp = () => {
 
   const handleKeyDown = (
     index: number,
-    e: React.KeyboardEvent<HTMLElement>
+    e: React.KeyboardEvent<HTMLElement>,
   ): void => {
     if (e.key === "Backspace" && !otp[index] && index > 0) {
       inputRefs.current[index - 1]?.focus();
@@ -93,7 +93,7 @@ const VerifyOtp = () => {
       fetchUsers();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (error: any) {
-      setError(error.response.data.message);
+      setError(error?.response?.data?.message || "OTP verification failed");
     } finally {
       setLoading(false);
     }
@@ -205,7 +205,7 @@ const VerifyOtp = () => {
               </p>
             ) : (
               <button
-                className="text-blue-400 hover: text-blue-300 font-medium text-sm disabled:opacity-50"
+                className="text-sky-400 underline-offset-2 hover:underline font-medium text-sm disabled:opacity-50"
                 disabled={resendLoading}
                 onClick={handleResendOtp}
               >
