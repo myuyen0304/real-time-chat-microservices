@@ -11,6 +11,12 @@ import toast, { Toaster } from "react-hot-toast";
 import Cookies from "js-cookie";
 import axios from "axios";
 
+interface ApiSuccessResponse<T> {
+  success: true;
+  message: string;
+  [key: string]: unknown;
+}
+
 const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL?.trim();
 
 export const user_service =
@@ -71,6 +77,20 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
   const [isAuth, setIsAuth] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [chats, setChats] = useState<Chats[] | null>(null);
+  const [users, setUsers] = useState<User[] | null>(null);
+
+  const resetAuthState = () => {
+    Cookies.remove("token");
+    setUser(null);
+    setIsAuth(false);
+    setChats(null);
+    setUsers(null);
+  };
+
+  const isUnauthorizedError = (error: unknown): boolean => {
+    return axios.isAxiosError(error) && error.response?.status === 401;
+  };
 
   async function fetchUser() {
     try {
@@ -89,25 +109,24 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setUser(data);
+      setUser((data as ApiSuccessResponse<User> & { user: User }).user);
       setIsAuth(true);
       setLoading(false);
     } catch (error) {
-      console.error(error);
-      // Quan trọng: Set isAuth = false khi có lỗi
-      setUser(null);
-      setIsAuth(false);
+      if (!isUnauthorizedError(error)) {
+        console.error(error);
+      }
+
+      resetAuthState();
       setLoading(false);
     }
   }
 
   async function logoutUser() {
-    Cookies.remove("token");
-    setUser(null);
-    setIsAuth(false);
+    resetAuthState();
     toast.success("User logged out");
   }
-  const [chats, setChats] = useState<Chats[] | null>(null);
+
   async function fetchChats() {
     const token = Cookies.get("token");
     // Kiểm tra token trước khi gọi API
@@ -121,14 +140,18 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setChats(data.chats);
+      setChats(
+        (data as ApiSuccessResponse<Chats[]> & { chats: Chats[] }).chats,
+      );
     } catch (error) {
+      if (isUnauthorizedError(error)) {
+        resetAuthState();
+        return;
+      }
+
       console.error(error);
-      // Không cần xử lý gì, chỉ log lỗi
     }
   }
-
-  const [users, setUsers] = useState<User[] | null>(null);
 
   async function fetchUsers() {
     const token = Cookies.get("token");
@@ -143,10 +166,14 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setUsers(data);
+      setUsers((data as ApiSuccessResponse<User[]> & { users: User[] }).users);
     } catch (error) {
+      if (isUnauthorizedError(error)) {
+        resetAuthState();
+        return;
+      }
+
       console.error(error);
-      // Không cần xử lý gì, chỉ log lỗi
     }
   }
   useEffect(() => {
