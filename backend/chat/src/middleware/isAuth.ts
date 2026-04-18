@@ -1,7 +1,7 @@
 import type { NextFunction, Request, Response } from "express";
 import jwt, { type JwtPayload } from "jsonwebtoken";
 
-interface IUser extends Document {
+interface IUser {
   _id: string;
   name: string;
   email: string;
@@ -28,10 +28,10 @@ export const isAuth = async (
 
     const token = authHeader.split(" ")[1];
 
-    const decodedValue = jwt.verify(
-      token as string,
-      process.env.JWT_SECRET as string
-    ) as JwtPayload;
+    const publicKey = (process.env.JWT_PUBLIC_KEY as string).replace(/\\n/g, "\n");
+    const decodedValue = jwt.verify(token as string, publicKey, {
+      algorithms: ["RS256"],
+    }) as JwtPayload;
 
     if (!decodedValue || !decodedValue.user) {
       res.status(401).json({

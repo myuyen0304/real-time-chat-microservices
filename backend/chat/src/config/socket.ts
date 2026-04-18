@@ -6,6 +6,7 @@ import express from "express";
 
 const app = express();
 const server = http.createServer(app);
+const userSocketMap = new Map<string, Set<string>>();
 
 const io = new Server(server, {
   cors: {
@@ -17,6 +18,12 @@ const io = new Server(server, {
 const pubClient = createClient({ url: process.env.REDIS_URL as string });
 const subClient = pubClient.duplicate();
 
+const getOnlineUsers = (): string[] => Array.from(userSocketMap.keys());
+
+const broadcastOnlineUsers = () => {
+  io.emit("getOnlineUser", getOnlineUsers());
+};
+
 Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
   io.adapter(createAdapter(pubClient, subClient));
   console.log("Socket.IO Redis adapter connected");
@@ -25,8 +32,12 @@ Promise.all([pubClient.connect(), subClient.connect()]).then(() => {
 export const getReceiverSocketId = async (
   receiverId: string,
 ): Promise<string | undefined> => {
-  const socketId = await pubClient.get(`socket:user:${receiverId}`);
-  return socketId ?? undefined;
+  const socketIds = userSocketMap.get(receiverId);
+  return socketIds?.values().next().value;
+};
+
+export const getUserSocketIds = (userId: string): string[] => {
+  return Array.from(userSocketMap.get(userId) ?? []);
 };
 
 io.on("connection", async (socket: Socket) => {
@@ -35,19 +46,21 @@ io.on("connection", async (socket: Socket) => {
   const userId = socket.handshake.query.userId as string | undefined;
 
   if (userId && userId !== "undefined") {
-    await pubClient.set(`socket:user:${userId}`, socket.id);
+    const existingSockets = userSocketMap.get(userId) ?? new Set<string>();
+    existingSockets.add(socket.id);
+    userSocketMap.set(userId, existingSockets);
     console.log(`User ${userId} mapped to socket ${socket.id}`);
   }
 
-  const onlineUserIds: string[] = await pubClient.keys("socket:user:*");
-  const onlineUsers = onlineUserIds.map((key) =>
-    key.replace("socket:user:", ""),
-  );
-  io.emit("getOnlineUser", onlineUsers);
+  broadcastOnlineUsers();
 
   if (userId) {
     socket.join(userId);
   }
+
+  socket.on("syncOnlineUsers", async () => {
+    socket.emit("getOnlineUser", getOnlineUsers());
+  });
 
   socket.on("typing", (data) => {
     socket.to(data.chatId).emit("userTyping", {
@@ -74,12 +87,19 @@ io.on("connection", async (socket: Socket) => {
   socket.on("disconnect", async () => {
     console.log("User Disconnected", socket.id);
     if (userId) {
-      await pubClient.del(`socket:user:${userId}`);
-      const onlineUserIds: string[] = await pubClient.keys("socket:user:*");
-      const onlineUsers = onlineUserIds.map((key) =>
-        key.replace("socket:user:", ""),
-      );
-      io.emit("getOnlineUser", onlineUsers);
+      const existingSockets = userSocketMap.get(userId);
+
+      if (existingSockets) {
+        existingSockets.delete(socket.id);
+
+        if (existingSockets.size === 0) {
+          userSocketMap.delete(userId);
+        } else {
+          userSocketMap.set(userId, existingSockets);
+        }
+      }
+
+      broadcastOnlineUsers();
     }
   });
 });

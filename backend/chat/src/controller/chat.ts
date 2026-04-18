@@ -4,7 +4,7 @@ import type { AuthenticatedRequest } from "../middleware/isAuth.js";
 import { Chat } from "../model/Chat.js";
 import { Messages } from "../model/Message.js";
 import { UserSnapshot } from "../model/UserSnapshot.js";
-import { getReceiverSocketId, io } from "../config/socket.js";
+import { getUserSocketIds, io } from "../config/socket.js";
 
 type UploadedMessageFile = {
   path?: string;
@@ -115,15 +115,11 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     return;
   }
 
-  const receiverSocketId = await getReceiverSocketId(otherUserId.toString());
-  let isReceiverInChatRoom = false;
-
-  if (receiverSocketId) {
-    const receiverSocket = io.sockets.sockets.get(receiverSocketId);
-    if (receiverSocket && receiverSocket.rooms.has(chatId)) {
-      isReceiverInChatRoom = true;
-    }
-  }
+  const receiverSocketIds = getUserSocketIds(otherUserId.toString());
+  const isReceiverInChatRoom = receiverSocketIds.some((socketId) => {
+    const receiverSocket = io.sockets.sockets.get(socketId);
+    return Boolean(receiverSocket && receiverSocket.rooms.has(chatId));
+  });
 
   let messageData: any = {
     chatId,
@@ -170,17 +166,11 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
   );
 
   io.to(chatId).emit("newMessage", savedMessage);
-  if (receiverSocketId) {
-    io.to(receiverSocketId).emit("newMessage", savedMessage);
-  }
+  io.to(otherUserId.toString()).emit("newMessage", savedMessage);
+  io.to(senderId.toString()).emit("newMessage", savedMessage);
 
-  const senderSocketId = await getReceiverSocketId(senderId.toString());
-  if (senderSocketId) {
-    io.to(senderSocketId).emit("newMessage", savedMessage);
-  }
-
-  if (isReceiverInChatRoom && senderSocketId) {
-    io.to(senderSocketId).emit("messagesSeen", {
+  if (isReceiverInChatRoom) {
+    io.to(senderId.toString()).emit("messagesSeen", {
       chatId,
       seenBy: otherUserId,
       messageIds: [savedMessage._id],
@@ -229,11 +219,8 @@ export const getMessageByChat = TryCatch(
     const otherUserId = chat.users.find((id: string) => id !== userId);
 
     if (messagesToMarkSeen.length > 0) {
-      const otherUserSocketId = otherUserId
-        ? await getReceiverSocketId(otherUserId.toString())
-        : undefined;
-      if (otherUserSocketId) {
-        io.to(otherUserSocketId).emit("messagesSeen", {
+      if (otherUserId) {
+        io.to(otherUserId?.toString() || "").emit("messagesSeen", {
           chatId,
           seenBy: userId,
           messageIds: messagesToMarkSeen.map(

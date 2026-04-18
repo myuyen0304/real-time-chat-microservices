@@ -1,3 +1,4 @@
+import type { NextFunction, Request, Response } from "express";
 import multer from "multer";
 import multerStorageCloudinary from "multer-storage-cloudinary";
 
@@ -31,3 +32,16 @@ export const upload = multer({
     }
   },
 });
+
+export const parseMessageUpload = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!req.is("multipart/form-data")) {
+    next();
+    return;
+  }
+
+  upload.single("image")(req, res, next);
+};
