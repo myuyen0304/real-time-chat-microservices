@@ -5,7 +5,7 @@ interface MessageInputProps {
   selectedUser: string | null;
   message: string;
   setMessage: (message: string) => void;
-  handleMessageSend: (e: any, imageFile?: File | null) => void;
+  handleMessageSend: (imageFile?: File | null) => Promise<void>;
 }
 
 const MessageInput = ({
@@ -20,9 +20,12 @@ const MessageInput = ({
     e.preventDefault();
     if (!message.trim() && !imageFile) return;
     setIsUploading(true);
-    await handleMessageSend(e, imageFile);
-    setImageFile(null);
-    setIsUploading(false);
+    try {
+      await handleMessageSend(imageFile);
+      setImageFile(null);
+    } finally {
+      setIsUploading(false);
+    }
   };
   if (!selectedUser) return null;
   return (

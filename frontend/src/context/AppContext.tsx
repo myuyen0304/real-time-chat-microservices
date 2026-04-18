@@ -10,8 +10,18 @@ import React, {
 import toast, { Toaster } from "react-hot-toast";
 import Cookies from "js-cookie";
 import axios from "axios";
-export const user_service = "http://localhost:5000";
-export const chat_service = "http://localhost:5002";
+
+const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL?.trim();
+
+export const user_service =
+  process.env.NEXT_PUBLIC_USER_SERVICE_URL?.trim() ??
+  gatewayUrl ??
+  "http://localhost:5000";
+
+export const chat_service =
+  process.env.NEXT_PUBLIC_CHAT_SERVICE_URL?.trim() ??
+  gatewayUrl ??
+  "http://localhost:5002";
 
 export interface User {
   _id: string;
