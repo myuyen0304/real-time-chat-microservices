@@ -19,6 +19,7 @@ app.use(express.json());
 // app.use(morgan("dev"));
 
 // 4️. Routes - Cuối cùng
+app.get("/health", (_req, res) => res.json({ status: "ok", service: "user" }));
 app.use("/api/v1", userRouter);
 
 connectDB();
