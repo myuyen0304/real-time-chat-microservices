@@ -42,13 +42,14 @@ export const SocketProvider = ({ children }: ProviderProps) => {
     const newSocket = io(chat_service, {
       autoConnect: false,
       reconnection: true,
-      transports: ["websocket", "polling"],
+      tryAllTransports: true,
       auth: {
         token,
       },
     });
 
     newSocket.on("connect", () => {
+      setOnlineUsers([]);
       newSocket.emit("syncOnlineUsers");
     });
 
@@ -63,7 +64,14 @@ export const SocketProvider = ({ children }: ProviderProps) => {
     });
 
     newSocket.on("connect_error", (error) => {
-      console.error("Socket connection failed", error);
+      setOnlineUsers([]);
+
+      if (error.message.startsWith("Authentication failed")) {
+        console.warn("Socket authentication failed", error.message);
+        return;
+      }
+
+      console.warn("Socket connection retrying", error.message);
     });
 
     setSocket(newSocket);
