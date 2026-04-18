@@ -37,6 +37,7 @@ export const validateRequest = (
 
     if (errors.length > 0) {
       res.status(422).json({
+        success: false,
         message: "Validation failed",
         errors,
       });
