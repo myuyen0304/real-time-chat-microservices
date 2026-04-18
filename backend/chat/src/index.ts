@@ -1,13 +1,12 @@
 import express from "express";
-import dotenv from "dotenv";
 import connectDB from "./config/db.js";
 import chatRoutes from "./routes/chat.js";
 import cors from "cors";
 import { app, server } from "./config/socket.js";
 import { startUserEventsConsumer } from "./config/rabbitmq.js";
+import { chatEnv } from "./config/env.js";
 
-dotenv.config();
-const port = process.env.PORT;
+const port = chatEnv.PORT;
 
 app.use(express.json());
 app.use(cors());
