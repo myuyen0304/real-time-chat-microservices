@@ -1,16 +1,14 @@
 import express from "express";
-import dotenv from "dotenv";
 import connectDB from "./config/db.js";
-import {createClient} from "redis";
+import { createClient } from "redis";
 import userRouter from "./routes/user.js";
 import { connectRabbitMQ } from "./config/rabbitmq.js";
 import cors from "cors";
-
-dotenv.config();
+import { userEnv } from "./config/env.js";
 
 const app = express();
 // 1. CORS - Luôn đầu tiên
-app.use(cors()); 
+app.use(cors());
 
 // 2️. Body parsers
 app.use(express.json());
@@ -26,17 +24,18 @@ connectDB();
 connectRabbitMQ();
 
 export const redisClient = createClient({
-  url: process.env.REDIS_URL as string,
+  url: userEnv.REDIS_URL,
 });
 redisClient
   .connect()
   .then(() => console.log("Connected to Redis"))
-  .catch(console.error);
+  .catch((error) => {
+    console.error("Failed to connect to Redis", error);
+    process.exit(1);
+  });
 
-const port = process.env.PORT;
+const port = userEnv.PORT;
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`);
 });
-
-
