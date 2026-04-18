@@ -218,6 +218,13 @@ Rabbitmq_Password=guest
 ### frontend/.env.local
 
 ```env
+NEXT_PUBLIC_USER_SERVICE_URL=http://localhost:5000
+NEXT_PUBLIC_CHAT_SERVICE_URL=http://localhost:5002
+```
+
+Neu chay qua nginx gateway thay vi goi truc tiep tung service, dat:
+
+```env
 NEXT_PUBLIC_GATEWAY_URL=http://localhost:80
 ```
 
