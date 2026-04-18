@@ -4,6 +4,11 @@ import TryCatch from "../config/tryCatch.js";
 import { redisClient } from "../index.js";
 import type { AuthenticatedRequest } from "../middlewares/isAuth.js";
 import { User } from "../model/User.js";
+import {
+  getOtpKey,
+  hasOtpRateLimit,
+  setOtpRateLimit,
+} from "../utils/otpRateLimit.js";
 
 type JsonResponse = {
   status: (code: number) => { json: (body: unknown) => void };
@@ -57,9 +62,7 @@ const publishUserEvent = async (user: {
 
 export const loginUser = TryCatch(async (req, res) => {
   const { email } = req.body;
-  const rateLimitKey = `otp:ratelimit: ${email}`;
-  const rateLimit = await redisClient.get(rateLimitKey);
-  if (rateLimit) {
+  if (await hasOtpRateLimit(redisClient, email)) {
     respondError(
       res,
       429,
@@ -69,15 +72,13 @@ export const loginUser = TryCatch(async (req, res) => {
   }
 
   const otp = Math.floor(100000 + Math.random() * 900000).toString();
-  const otpKey = `otp:${email}`;
+  const otpKey = getOtpKey(email);
 
   await redisClient.set(otpKey, otp, {
     EX: 300,
   });
 
-  await redisClient.set(rateLimitKey, "true", {
-    EX: 60,
-  });
+  await setOtpRateLimit(redisClient, email);
 
   const message = {
     to: email,
