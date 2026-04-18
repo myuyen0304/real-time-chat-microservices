@@ -20,18 +20,69 @@ type ChatRequest = Request &
     file?: UploadedMessageFile | undefined;
   };
 
+const respondSuccess = (
+  res: Response,
+  message: string,
+  data?: Record<string, unknown>,
+  statusCode = 200,
+) => {
+  res.status(statusCode).json({
+    success: true,
+    message,
+    ...(data ?? {}),
+  });
+};
+
+const respondError = (
+  res: Response,
+  statusCode: number,
+  message: string,
+  extra?: Record<string, unknown>,
+) => {
+  res.status(statusCode).json({
+    success: false,
+    message,
+    ...(extra ?? {}),
+  });
+};
+
+const respondUnauthorized = (res: Response) => {
+  respondError(res, 401, "Please login");
+};
+
+const respondForbidden = (
+  res: Response,
+  message = "You are not a participant",
+) => {
+  respondError(res, 403, message);
+};
+
+const respondNotFound = (res: Response, resource: string) => {
+  respondError(res, 404, `${resource} not found`);
+};
+
 export const createNewChat = TryCatch(
   async (req: ChatRequest, res: Response) => {
     const userId = req.user?._id;
     const { otherUserId } = req.body;
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const otherUser = await UserSnapshot.findById(otherUserId);
+    if (!otherUser) {
+      respondNotFound(res, "Other user");
+      return;
+    }
 
     const existingChat = await Chat.findOne({
       users: { $all: [userId, otherUserId], $size: 2 },
     });
 
     if (existingChat) {
-      res.json({
-        message: "Chat already existed",
+      respondError(res, 409, "Chat already existed", {
         chatId: existingChat._id,
       });
       return;
@@ -40,17 +91,21 @@ export const createNewChat = TryCatch(
     const newChat = await Chat.create({
       users: [userId, otherUserId],
     });
-    res.status(201).json({
-      message: "New Chat created",
-      chatId: newChat._id,
-    });
+    respondSuccess(
+      res,
+      "New chat created",
+      {
+        chatId: newChat._id,
+      },
+      201,
+    );
   },
 );
 
 export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
   const userId = req.user?._id;
   if (!userId) {
-    res.status(400).json({ message: "UserId missing" });
+    respondUnauthorized(res);
     return;
   }
 
@@ -80,7 +135,7 @@ export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
     }),
   );
 
-  res.json({ chats: chatWithUserData });
+  respondSuccess(res, "Chats fetched", { chats: chatWithUserData });
 });
 
 export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
@@ -89,13 +144,13 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
   const imageFile = req.file;
 
   if (!senderId) {
-    res.status(401).json({ message: "Unauthorized" });
+    respondUnauthorized(res);
     return;
   }
 
   const chat = await Chat.findById(chatId);
   if (!chat) {
-    res.status(400).json({ message: "Chat not found" });
+    respondNotFound(res, "Chat");
     return;
   }
 
@@ -103,7 +158,7 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     (id: string) => id.toString() === senderId.toString(),
   );
   if (!isUserInChat) {
-    res.status(403).json({ message: "You are not a participant" });
+    respondForbidden(res);
     return;
   }
 
@@ -111,7 +166,7 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     (id: string) => id.toString() !== senderId.toString(),
   );
   if (!otherUserId) {
-    res.status(400).json({ message: "No other users" });
+    respondError(res, 422, "Chat must contain exactly two participants");
     return;
   }
 
@@ -177,7 +232,12 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     });
   }
 
-  res.status(201).json({ message: savedMessage, sender: senderId });
+  respondSuccess(
+    res,
+    "Message sent",
+    { message: savedMessage, sender: senderId },
+    201,
+  );
 });
 
 export const getMessageByChat = TryCatch(
@@ -186,13 +246,13 @@ export const getMessageByChat = TryCatch(
     const { chatId } = req.params as { chatId: string };
 
     if (!userId) {
-      res.status(401).json({ message: "Unauthorized" });
+      respondUnauthorized(res);
       return;
     }
 
     const chat = await Chat.findById(chatId);
     if (!chat) {
-      res.status(400).json({ message: "Chat not found" });
+      respondNotFound(res, "Chat");
       return;
     }
 
@@ -200,7 +260,7 @@ export const getMessageByChat = TryCatch(
       (id: string) => id.toString() === userId.toString(),
     );
     if (!isUserInChat) {
-      res.status(403).json({ message: "You are not a participant" });
+      respondForbidden(res);
       return;
     }
 
@@ -234,7 +294,7 @@ export const getMessageByChat = TryCatch(
       ? await UserSnapshot.findById(otherUserId)
       : null;
 
-    res.json({
+    respondSuccess(res, "Messages fetched", {
       messages,
       user: userSnapshot ?? { _id: otherUserId, name: "Unknown User" },
     });
