@@ -12,8 +12,6 @@ import ChatHeader from "@/components/ChatHeader";
 import ChatMessages from "@/components/ChatMessages";
 import MessageInput from "@/components/MessageInput";
 import { SocketData } from "@/context/SocketContext";
-import { Socket } from "socket.io-client";
-import { text } from "stream/consumers";
 export interface Message {
   _id: string;
   chatId: string;
@@ -160,7 +158,6 @@ const ChatApp = () => {
       const { data } = await axios.post(
         `${chat_service}/api/v1/chat/new`,
         {
-          userId: loggedInUser?._id,
           otherUserId: u._id,
         },
         {
