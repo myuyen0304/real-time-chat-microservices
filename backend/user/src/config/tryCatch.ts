@@ -7,6 +7,7 @@ const TryCatch = (handler: RequestHandler): RequestHandler => {
     } catch (error: any) {
       if (error?.name === "CastError" || error?.name === "ValidationError") {
         res.status(422).json({
+          success: false,
           message: "Validation failed",
           errors: [
             {
@@ -19,9 +20,10 @@ const TryCatch = (handler: RequestHandler): RequestHandler => {
         return;
       }
 
-      res
-        .status(error?.statusCode ?? 500)
-        .json({ message: error?.message ?? "Internal server error" });
+      res.status(error?.statusCode ?? 500).json({
+        success: false,
+        message: error?.message ?? "Internal server error",
+      });
     }
   };
 };
