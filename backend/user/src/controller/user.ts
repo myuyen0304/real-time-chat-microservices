@@ -5,6 +5,45 @@ import { redisClient } from "../index.js";
 import type { AuthenticatedRequest } from "../middlewares/isAuth.js";
 import { User } from "../model/User.js";
 
+type JsonResponse = {
+  status: (code: number) => { json: (body: unknown) => void };
+  json: (body: unknown) => void;
+};
+
+const respondSuccess = (
+  res: JsonResponse,
+  message: string,
+  data?: Record<string, unknown>,
+  statusCode = 200,
+) => {
+  res.status(statusCode).json({
+    success: true,
+    message,
+    ...(data ?? {}),
+  });
+};
+
+const respondError = (
+  res: JsonResponse,
+  statusCode: number,
+  message: string,
+  extra?: Record<string, unknown>,
+) => {
+  res.status(statusCode).json({
+    success: false,
+    message,
+    ...(extra ?? {}),
+  });
+};
+
+const respondUnauthorized = (res: JsonResponse) => {
+  respondError(res, 401, "Please login");
+};
+
+const respondNotFound = (res: JsonResponse, resource: string) => {
+  respondError(res, 404, `${resource} not found`);
+};
+
 const publishUserEvent = async (user: {
   _id: any;
   name: string;
@@ -21,9 +60,11 @@ export const loginUser = TryCatch(async (req, res) => {
   const rateLimitKey = `otp:ratelimit: ${email}`;
   const rateLimit = await redisClient.get(rateLimitKey);
   if (rateLimit) {
-    res.status(429).json({
-      message: "Too many requests. Please wait before requesting new otp",
-    });
+    respondError(
+      res,
+      429,
+      "Too many requests. Please wait before requesting new otp",
+    );
     return;
   }
 
@@ -45,9 +86,7 @@ export const loginUser = TryCatch(async (req, res) => {
   };
 
   await publishToQueue("send-otp", message);
-  res.status(200).json({
-    message: "OTP sent to your mail",
-  });
+  respondSuccess(res, "OTP sent to your mail");
 });
 
 export const verifyUser = TryCatch(async (req, res) => {
@@ -56,9 +95,7 @@ export const verifyUser = TryCatch(async (req, res) => {
   const storeOtp = await redisClient.get(otpKey);
 
   if (!storeOtp || storeOtp !== enteredOtp) {
-    res.status(400).json({
-      message: "Invalid or expired OTP",
-    });
+    respondError(res, 400, "Invalid or expired OTP");
     return;
   }
 
@@ -73,8 +110,7 @@ export const verifyUser = TryCatch(async (req, res) => {
   await publishUserEvent(user);
 
   const token = generateToken(user);
-  res.json({
-    message: "User verified",
+  respondSuccess(res, "User verified", {
     user,
     token,
   });
@@ -82,37 +118,57 @@ export const verifyUser = TryCatch(async (req, res) => {
 
 export const myProfile = TryCatch(async (req: AuthenticatedRequest, res) => {
   const user = req.user;
-  res.json(user);
+
+  if (!user) {
+    respondUnauthorized(res);
+    return;
+  }
+
+  respondSuccess(res, "Current user fetched", { user });
 });
 
 export const updateName = TryCatch(async (req: AuthenticatedRequest, res) => {
+  if (!req.user?._id) {
+    respondUnauthorized(res);
+    return;
+  }
+
   const user = await User.findById(req.user?._id);
 
   if (!user) {
-    res.status(401).json({
-      message: "Please login",
-    });
+    respondUnauthorized(res);
     return;
   }
+
   user.name = req.body.name;
   await user.save();
 
   await publishUserEvent(user);
 
   const token = generateToken(user);
-  res.json({
-    message: "User updated",
+  respondSuccess(res, "User updated", {
     user,
     token,
   });
 });
 
 export const getAllUsers = TryCatch(async (req: AuthenticatedRequest, res) => {
+  if (!req.user?._id) {
+    respondUnauthorized(res);
+    return;
+  }
+
   const users = await User.find();
-  res.json(users);
+  respondSuccess(res, "Users fetched", { users });
 });
 
 export const getAUser = TryCatch(async (req, res) => {
   const user = await User.findById(req.params.id);
-  res.json(user);
+
+  if (!user) {
+    respondNotFound(res, "User");
+    return;
+  }
+
+  respondSuccess(res, "User fetched", { user });
 });
