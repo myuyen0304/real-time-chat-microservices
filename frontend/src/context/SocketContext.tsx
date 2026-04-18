@@ -9,6 +9,7 @@ import {
 } from "react";
 import { io, Socket } from "socket.io-client";
 import { chat_service, useAppData } from "./AppContext";
+import Cookies from "js-cookie";
 
 interface SocketContextType {
   socket: Socket | null;
@@ -30,7 +31,9 @@ export const SocketProvider = ({ children }: ProviderProps) => {
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
 
   useEffect(() => {
-    if (!user?._id) {
+    const token = Cookies.get("token");
+
+    if (!user?._id || !token) {
       setSocket(null);
       setOnlineUsers([]);
       return;
@@ -40,8 +43,8 @@ export const SocketProvider = ({ children }: ProviderProps) => {
       autoConnect: false,
       reconnection: true,
       transports: ["websocket", "polling"],
-      query: {
-        userId: user._id,
+      auth: {
+        token,
       },
     });
 
