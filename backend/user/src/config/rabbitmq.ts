@@ -3,20 +3,32 @@ import { userEnv } from "./env.js";
 
 let channel: amqp.Channel;
 
+const RABBITMQ_RETRY_DELAY_MS = 3000;
+
+const waitForRetry = async () => {
+  await new Promise((resolve) => setTimeout(resolve, RABBITMQ_RETRY_DELAY_MS));
+};
+
 export const connectRabbitMQ = async () => {
-  try {
-    const connection = await amqp.connect({
-      protocol: "amqp",
-      hostname: userEnv.Rabbitmq_Host,
-      port: 5672,
-      username: userEnv.Rabbitmq_Username,
-      password: userEnv.Rabbitmq_Password,
-    });
-    channel = await connection.createChannel();
-    console.log("Connected to RabbitMQ");
-  } catch (error) {
-    console.error("Fail to connect to RabbitMQ");
-    throw error;
+  while (!channel) {
+    try {
+      const connection = await amqp.connect({
+        protocol: "amqp",
+        hostname: userEnv.Rabbitmq_Host,
+        port: 5672,
+        username: userEnv.Rabbitmq_Username,
+        password: userEnv.Rabbitmq_Password,
+      });
+      channel = await connection.createChannel();
+      console.log("Connected to RabbitMQ");
+      return;
+    } catch (error) {
+      console.error(
+        "Fail to connect to RabbitMQ, retrying in 3 seconds",
+        error,
+      );
+      await waitForRetry();
+    }
   }
 };
 export const publishToQueue = async (queueName: string, message: any) => {

@@ -10,6 +10,31 @@ services:
       timeout: 5s
       retries: 5
 
+  mongo:
+    image: mongo:8
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
   user-service:
     build: ./backend/user
     ports:
@@ -18,8 +43,14 @@ services:
     environment:
       - Rabbitmq_Host=rabbitmq
       - MONGO_DB_NAME=chat_user_service
+      - MONGO_URI=mongodb://mongo:27017/chat_app
+      - REDIS_URL=redis://redis:6379
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
@@ -46,8 +77,14 @@ services:
       - Rabbitmq_Username=guest
       - Rabbitmq_Password=guest
       - MONGO_DB_NAME=chat_chat_service
+      - MONGO_URI=mongodb://mongo:27017/chat_app
+      - REDIS_URL=redis://redis:6379
     depends_on:
       rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:5002/health"]
@@ -71,3 +108,7 @@ services:
       - "3000:3000"
     depends_on:
       - gateway
+
+volumes:
+  mongo_data:
+  redis_data:
