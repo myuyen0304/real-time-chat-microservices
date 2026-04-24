@@ -1,51 +1,60 @@
 import { User } from "@/context/AppContext";
-import { Menu, UserCircle } from "lucide-react";
+import { Loader2, Menu, UserCircle, Video } from "lucide-react";
 import React from "react";
 
 interface ChatHeaderProps {
   user: User | null;
+  selectedChatId: string | null;
   setSidebarOpen: (open: boolean) => void;
   isTyping: boolean;
   onlineUsers: string[];
+  onStartVideoCall: () => void;
+  isStartingCall: boolean;
+  isCallBusy: boolean;
 }
 
 const ChatHeader = ({
   user,
+  selectedChatId,
   setSidebarOpen,
   isTyping,
   onlineUsers,
+  onStartVideoCall,
+  isStartingCall,
+  isCallBusy,
 }: ChatHeaderProps) => {
-  const isOnlineUser = user && onlineUsers.includes(user._id);
+  const isOnlineUser = user ? onlineUsers.includes(user._id) : false;
+  const canStartCall = Boolean(
+    user && selectedChatId && isOnlineUser && !isCallBusy && !isStartingCall,
+  );
+
   return (
     <>
       <div className="sm:hidden fixed top-4 right-4 z-30">
         <button
           onClick={() => setSidebarOpen(true)}
-          className="p-3 bg-gray-800 rounded-lg hover:bg-gray-700 transition-colors"
+          className="rounded-lg bg-gray-800 p-3 transition-colors hover:bg-gray-700"
         >
-          <Menu className="w-5 h-5 text-gray-200" />
+          <Menu className="h-5 w-5 text-gray-200" />
         </button>
       </div>
-      {/* Chat header */}
-      <div className="mb-6 bg-gray-800 rounded-lg border border-gray-700 p-6">
+      <div className="mb-6 rounded-lg border border-gray-700 bg-gray-800 p-6">
         <div className="flex items-center gap-4">
           {user ? (
             <>
               <div className="relative">
-                <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center">
-                  <UserCircle className="w-8 h-8 text-gray-300" />
+                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-700">
+                  <UserCircle className="h-8 w-8 text-gray-300" />
                 </div>
-                {/* online user setup */}
                 {isOnlineUser && (
-                  <span className="absolute -bottom-1 -right-1 w-5 h-5 rounded-full bg-green-500 border-2 border-gray-800">
-                    <span className="absolute inset-0 rounded-full bg-green-500 animate-ping opacity-75"></span>
+                  <span className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full border-2 border-gray-800 bg-green-500">
+                    <span className="absolute inset-0 rounded-full bg-green-500 opacity-75 animate-ping"></span>
                   </span>
                 )}
               </div>
-              {/* user info */}
-              <div className="flex-1 min-w-0">
-                <div className="flex-1 flex flex-col gap-1">
-                  <h2 className="text-2xl font-bold text-white truncate">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-col gap-1">
+                  <h2 className="truncate text-2xl font-bold text-white">
                     {user.name}
                   </h2>
                 </div>
@@ -54,24 +63,24 @@ const ChatHeader = ({
                   {isTyping ? (
                     <div className="flex items-center gap-2 text-sm">
                       <div className="flex gap-1">
-                        <div className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce"></div>
+                        <div className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500"></div>
                         <div
-                          className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce"
+                          className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500"
                           style={{ animationDelay: "0.1s" }}
                         ></div>
                         <div
-                          className="w-1.5 h-1.5 bg-blue-500 rounded-full animate-bounce"
+                          className="h-1.5 w-1.5 animate-bounce rounded-full bg-blue-500"
                           style={{ animationDelay: "0.2s" }}
                         ></div>
                       </div>
-                      <span className="text-blue-500 font-medium">
+                      <span className="font-medium text-blue-500">
                         typing...
                       </span>
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
                       <div
-                        className={`w-2 h-2 rounded-full ${
+                        className={`h-2 w-2 rounded-full ${
                           isOnlineUser ? "bg-green-500" : "bg-gray-500"
                         }`}
                       ></div>
@@ -86,17 +95,30 @@ const ChatHeader = ({
                   )}
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={onStartVideoCall}
+                disabled={!canStartCall}
+                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-300 transition-colors hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-gray-500"
+                aria-label="Start video call"
+              >
+                {isStartingCall ? (
+                  <Loader2 className="h-5 w-5 animate-spin" />
+                ) : (
+                  <Video className="h-5 w-5" />
+                )}
+              </button>
             </>
           ) : (
             <div className="flex items-center gap-4">
-              <div className="w-14 h-14 rounded-full bg-gray-700 flex items-center justify-center">
-                <UserCircle className="w-8 h-8 text-gray-300" />
+              <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-700">
+                <UserCircle className="h-8 w-8 text-gray-300" />
               </div>
               <div>
                 <h2 className="text-2xl font-bold text-gray-400">
                   Select a conversation
                 </h2>
-                <p className="text-sm text-gray-500 mt-1">
+                <p className="mt-1 text-sm text-gray-500">
                   Choose a chat from the sidebar to start messaging
                 </p>
               </div>

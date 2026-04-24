@@ -2,14 +2,14 @@ import { Loader2, Paperclip, Send, X } from "lucide-react";
 import React, { useState } from "react";
 
 interface MessageInputProps {
-  selectedUser: string | null;
+  selectedChatId: string | null;
   message: string;
   setMessage: (message: string) => void;
   handleMessageSend: (imageFile?: File | null) => Promise<void>;
 }
 
 const MessageInput = ({
-  selectedUser,
+  selectedChatId,
   message,
   setMessage,
   handleMessageSend,
@@ -27,7 +27,7 @@ const MessageInput = ({
       setIsUploading(false);
     }
   };
-  if (!selectedUser) return null;
+  if (!selectedChatId) return null;
   return (
     <form
       onSubmit={handleSubmit}

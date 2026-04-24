@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { AppProvider } from "@/context/AppContext";
 import { SocketProvider } from "@/context/SocketContext";
+import { CallProvider } from "@/context/CallContext";
 // import { AppProvider } from "@/context/AppContext";
 
 export const metadata: Metadata = {
@@ -16,12 +17,19 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-     <body>
-      <AppProvider>
-        <SocketProvider> {children} </SocketProvider>
-      </AppProvider>
-     </body>
-      
+      <head>
+        <meta
+          name="format-detection"
+          content="telephone=no, date=no, email=no, address=no"
+        />
+      </head>
+      <body>
+        <AppProvider>
+          <SocketProvider>
+            <CallProvider>{children}</CallProvider>
+          </SocketProvider>
+        </AppProvider>
+      </body>
     </html>
   );
 }

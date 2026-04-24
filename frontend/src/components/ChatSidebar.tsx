@@ -24,8 +24,8 @@ interface ChatSidebarProps {
   loggedInUser: User | null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   chats: any[] | null;
-  selectedUser: string | null;
-  setSelectedUser: (userId: string | null) => void;
+  selectedChatId: string | null;
+  setSelectedChatId: (chatId: string | null) => void;
   handleLogout: () => void;
   createChat: (user: User) => void;
   onlineUsers: string[];
@@ -38,8 +38,8 @@ const ChatSidebar = ({
   users,
   loggedInUser,
   chats,
-  selectedUser,
-  setSelectedUser,
+  selectedChatId,
+  setSelectedChatId,
   handleLogout,
   createChat,
   onlineUsers,
@@ -156,7 +156,7 @@ const ChatSidebar = ({
             <div className="space-y-2 overflow-y-auto h-full pb-4">
               {chats.map((chat) => {
                 const latestMessage = chat.chat.latestMessage;
-                const isSelected = selectedUser === chat.chat._id;
+                const isSelected = selectedChatId === chat.chat._id;
                 const isSentByMe = latestMessage?.sender === loggedInUser?._id;
                 const unseenCount = chat.chat.unseenCount || 0;
 
@@ -165,7 +165,7 @@ const ChatSidebar = ({
                     key={chat.chat._id}
                     type="button"
                     onClick={() => {
-                      setSelectedUser(chat.chat._id);
+                      setSelectedChatId(chat.chat._id);
                       setSidebarOpen(false);
                     }}
                     className={`w-full text-left p-4 rounded-lg transition-colors ${

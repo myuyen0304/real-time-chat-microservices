@@ -26,6 +26,10 @@ export const chatEnv = {
   MONGO_URI: getRequiredEnv("MONGO_URI"),
   MONGO_DB_NAME: getOptionalEnv("MONGO_DB_NAME", "ChatappMicroservice"),
   REDIS_URL: getRequiredEnv("REDIS_URL"),
+  CALL_RING_TIMEOUT_SECONDS: Number.parseInt(
+    getOptionalEnv("CALL_RING_TIMEOUT_SECONDS", "30"),
+    10,
+  ),
   JWT_PUBLIC_KEY: getRequiredEnv("JWT_PUBLIC_KEY").replace(/\\n/g, "\n"),
   JWT_ISSUER: getOptionalEnv("JWT_ISSUER", "chat-app-auth"),
   JWT_AUDIENCE: getOptionalEnv("JWT_AUDIENCE", "chat-app-clients"),

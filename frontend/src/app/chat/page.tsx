@@ -3,7 +3,7 @@
 import ChatSidebar from "@/components/ChatSidebar";
 import Loading from "@/components/Loading";
 import { chat_service, useAppData, User } from "@/context/AppContext";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import React, { useEffect, useState } from "react";
 import toast from "react-hot-toast";
 import Cookies from "js-cookie";
@@ -12,6 +12,9 @@ import ChatHeader from "@/components/ChatHeader";
 import ChatMessages from "@/components/ChatMessages";
 import MessageInput from "@/components/MessageInput";
 import { SocketData } from "@/context/SocketContext";
+import { useCallData } from "@/context/CallContext";
+import { Suspense } from "react";
+
 export interface Message {
   _id: string;
   chatId: string;
@@ -21,12 +24,24 @@ export interface Message {
     url: string;
     publicId: string;
   };
-  messageType: "text" | "image";
+  call?: {
+    callId: string;
+    mode: "video";
+    status: "declined" | "missed" | "ended" | "cancelled";
+    endReason?: "declined" | "missed" | "hangup" | "disconnect" | "cancelled";
+    durationSeconds?: number;
+    startedAt?: string;
+    endedAt?: string;
+    initiatedBy: string;
+    endedBy?: string;
+  };
+  messageType: "text" | "image" | "call";
   seen: boolean;
   seenAt?: string;
   createdAt: string;
 }
-const ChatApp = () => {
+
+const ChatAppContent = () => {
   const {
     loading,
     isAuth,
@@ -37,11 +52,12 @@ const ChatApp = () => {
     fetchChats,
     setChats,
   } = useAppData();
-
   const { onlineUsers, socket } = SocketData();
-  // console.log(onlineUsers);
+  const { startVideoCall, isStartingCall, isCallBusy } = useCallData();
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
-  const [selectedUser, setSelectedUser] = useState<string | null>(null);
+  const [selectedChatId, setSelectedChatId] = useState<string | null>(null);
   const [message, setMessage] = useState("");
   const [siderbarOpen, setSiderbarOpen] = useState(false);
   const [messages, setMessages] = useState<Message[] | null>(null);
@@ -52,16 +68,22 @@ const ChatApp = () => {
     null,
   );
 
-  const router = useRouter();
-
   useEffect(() => {
     if (!loading && !isAuth) {
-      router.replace("/login"); // Dùng replace thay vì push để không lưu vào history
+      router.replace("/login");
     }
   }, [isAuth, router, loading]);
 
+  useEffect(() => {
+    const chatIdFromQuery = searchParams.get("chatId");
+
+    if (chatIdFromQuery) {
+      setSelectedChatId(chatIdFromQuery);
+    }
+  }, [searchParams]);
+
   const handleLogout = () => {
-    setSelectedUser(null);
+    setSelectedChatId(null);
     setMessages(null);
     setUser(null);
     setIsTyping(false);
@@ -71,16 +93,16 @@ const ChatApp = () => {
     router.replace("/login");
   };
 
-  async function fetchChat() {
+  const fetchChat = async () => {
     const token = Cookies.get("token");
 
-    if (!selectedUser || !token || !isAuth) {
+    if (!selectedChatId || !token || !isAuth) {
       return;
     }
 
     try {
       const { data } = await axios.get(
-        `${chat_service}/api/v1/message/${selectedUser}`,
+        `${chat_service}/api/v1/message/${selectedChatId}`,
         {
           headers: {
             Authorization: `Bearer ${token}`,
@@ -94,15 +116,17 @@ const ChatApp = () => {
       console.error(error);
       toast.error("Fail to load messages");
     }
-  }
+  };
 
   const moveChatToTop = (
     chatId: string,
-    newMessage: any,
+    newMessage: { text?: string; sender: string },
     updatedUnseenCount = true,
   ) => {
     setChats((prev) => {
-      if (!prev) return null;
+      if (!prev) {
+        return null;
+      }
 
       const updatedChats = [...prev];
       const chatIndex = updatedChats.findIndex(
@@ -111,12 +135,14 @@ const ChatApp = () => {
 
       if (chatIndex !== -1) {
         const [moveChat] = updatedChats.splice(chatIndex, 1);
-        const updatedChat = {
+        const previewText = newMessage.text?.trim() || "Image";
+
+        updatedChats.unshift({
           ...moveChat,
           chat: {
             ...moveChat.chat,
             latestMessage: {
-              text: newMessage.text,
+              text: previewText,
               sender: newMessage.sender,
             },
             updatedAt: new Date().toString(),
@@ -125,17 +151,18 @@ const ChatApp = () => {
                 ? (moveChat.chat.unseenCount || 0) + 1
                 : moveChat.chat.unseenCount || 0,
           },
-        };
-
-        updatedChats.unshift(updatedChat);
+        });
       }
+
       return updatedChats;
     });
   };
 
   const resetUnseenCount = (chatId: string) => {
     setChats((prev) => {
-      if (!prev) return null;
+      if (!prev) {
+        return null;
+      }
 
       return prev.map((chat) => {
         if (chat.chat._id === chatId) {
@@ -147,18 +174,19 @@ const ChatApp = () => {
             },
           };
         }
+
         return chat;
       });
     });
   };
 
-  async function createChat(u: User) {
+  const createChat = async (nextUser: User) => {
     try {
       const token = Cookies.get("token");
       const { data } = await axios.post(
         `${chat_service}/api/v1/chat/new`,
         {
-          otherUserId: u._id,
+          otherUserId: nextUser._id,
         },
         {
           headers: {
@@ -166,27 +194,51 @@ const ChatApp = () => {
           },
         },
       );
-      setSelectedUser(data.chatId);
+      setSelectedChatId(data.chatId);
       setShowAllUser(false);
       await fetchChats();
     } catch (error) {
+      if (axios.isAxiosError(error) && error.response?.status === 409) {
+        const existingChatId = error.response.data?.chatId as
+          | string
+          | undefined;
+
+        if (existingChatId) {
+          setSelectedChatId(existingChatId);
+          setShowAllUser(false);
+          await fetchChats();
+          return;
+        }
+      }
+
       toast.error("Fail to start chat");
     }
-  }
+  };
+
+  const handleStartVideoCall = async () => {
+    if (!selectedChatId || !user) {
+      return;
+    }
+
+    await startVideoCall(selectedChatId, user);
+  };
 
   const handleMessageSend = async (imageFile?: File | null) => {
-    if (!message.trim() && !imageFile && !selectedUser) return;
+    if (!message.trim() && !imageFile) {
+      return;
+    }
 
-    if (!selectedUser) return;
+    if (!selectedChatId) {
+      return;
+    }
 
-    // socket work
     if (typingTimeOut) {
       clearTimeout(typingTimeOut);
       setTypingTimeOut(null);
     }
 
     socket?.emit("stopTyping", {
-      chatId: selectedUser,
+      chatId: selectedChatId,
       userId: loggedInUser?._id,
     });
 
@@ -194,11 +246,10 @@ const ChatApp = () => {
 
     try {
       const trimmedMessage = message.trim();
-
       const payload = imageFile
         ? (() => {
             const formData = new FormData();
-            formData.append("chatId", selectedUser);
+            formData.append("chatId", selectedChatId);
 
             if (trimmedMessage) {
               formData.append("text", trimmedMessage);
@@ -208,7 +259,7 @@ const ChatApp = () => {
             return formData;
           })()
         : {
-            chatId: selectedUser,
+            chatId: selectedChatId,
             text: trimmedMessage,
           };
 
@@ -224,29 +275,25 @@ const ChatApp = () => {
         },
       );
 
-      // console.log("Response from server:", data); // Kiểm tra response
-      // console.log("Message data:", data.message); // Kiểm tra message object
-
       setMessages((prev) => {
         const currentMessages = prev || [];
         const messageExists = currentMessages.some(
-          (msg) => msg._id === data.message._id,
+          (currentMessage) => currentMessage._id === data.message._id,
         );
 
         if (!messageExists) {
           return [...currentMessages, data.message];
         }
+
         return currentMessages;
       });
 
       setMessage("");
 
-      const displayText = imageFile ? "📷 image" : message;
-
       moveChatToTop(
-        selectedUser!,
+        selectedChatId,
         {
-          text: displayText,
+          text: imageFile ? "Image" : message,
           sender: data.sender,
         },
         false,
@@ -256,14 +303,16 @@ const ChatApp = () => {
       toast.error("Failed to send message");
     }
   };
+
   const handleTyping = (value: string) => {
     setMessage(value);
-    if (!selectedUser || !socket) return;
+    if (!selectedChatId || !socket) {
+      return;
+    }
 
-    //  socket setup
     if (value.trim()) {
       socket.emit("typing", {
-        chatId: selectedUser,
+        chatId: selectedChatId,
         userId: loggedInUser?._id,
       });
     }
@@ -271,9 +320,10 @@ const ChatApp = () => {
     if (typingTimeOut) {
       clearTimeout(typingTimeOut);
     }
+
     const timeout = setTimeout(() => {
       socket.emit("stopTyping", {
-        chatId: selectedUser,
+        chatId: selectedChatId,
         userId: loggedInUser?._id,
       });
     }, 2000);
@@ -282,70 +332,83 @@ const ChatApp = () => {
   };
 
   useEffect(() => {
-    socket?.on("newMessage", (message) => {
-      console.log("Received new message:", message);
-
-      if (selectedUser === message.chatId) {
+    socket?.on("newMessage", (nextMessage: Message) => {
+      if (selectedChatId === nextMessage.chatId) {
         setMessages((prev) => {
           const currentMessages = prev || [];
           const messageExists = currentMessages.some(
-            (msg) => msg._id === message._id,
+            (currentMessage) => currentMessage._id === nextMessage._id,
           );
+
           if (!messageExists) {
-            return [...currentMessages, message];
+            return [...currentMessages, nextMessage];
           }
+
           return currentMessages;
         });
-        moveChatToTop(message.chatId, message, false);
+        moveChatToTop(nextMessage.chatId, nextMessage, false);
       } else {
-        moveChatToTop(message.chatId, message, true);
+        moveChatToTop(nextMessage.chatId, nextMessage, true);
       }
     });
 
-    socket?.on("messagesSeen", (data) => {
-      console.log("Message seen by:", data);
-
-      if (selectedUser === data.chatId) {
-        setMessages((prev) => {
-          if (!prev) return null;
-          return prev.map((msg) => {
-            if (
-              msg.sender === loggedInUser?._id &&
-              data.messageIds &&
-              data.messageIds.includes(msg._id)
-            ) {
-              return {
-                ...msg,
-                seen: true,
-                seenAt: new Date().toString(),
-              };
-            } else if (msg.sender === loggedInUser?._id && !data.messageIds) {
-              return {
-                ...msg,
-                seen: true,
-                seenAt: new Date().toString(),
-              };
+    socket?.on(
+      "messagesSeen",
+      (data: { chatId: string; messageIds?: string[] }) => {
+        if (selectedChatId === data.chatId) {
+          setMessages((prev) => {
+            if (!prev) {
+              return null;
             }
-            return msg;
-          });
-        });
-      }
-    });
 
-    socket?.on("userTyping", (data) => {
-      console.log("received user typing", data);
-      if (data.chatId === selectedUser && data.userId !== loggedInUser?._id) {
+            return prev.map((currentMessage) => {
+              if (
+                currentMessage.sender === loggedInUser?._id &&
+                data.messageIds &&
+                data.messageIds.includes(currentMessage._id)
+              ) {
+                return {
+                  ...currentMessage,
+                  seen: true,
+                  seenAt: new Date().toString(),
+                };
+              }
+
+              if (
+                currentMessage.sender === loggedInUser?._id &&
+                !data.messageIds
+              ) {
+                return {
+                  ...currentMessage,
+                  seen: true,
+                  seenAt: new Date().toString(),
+                };
+              }
+
+              return currentMessage;
+            });
+          });
+        }
+      },
+    );
+
+    socket?.on("userTyping", (data: { chatId: string; userId: string }) => {
+      if (data.chatId === selectedChatId && data.userId !== loggedInUser?._id) {
         setIsTyping(true);
       }
     });
 
-    //
-    socket?.on("userStoppedTyping", (data) => {
-      console.log("received user stoped typing", data);
-      if (data.chatId === selectedUser && data.userId !== loggedInUser?._id) {
-        setIsTyping(false);
-      }
-    });
+    socket?.on(
+      "userStoppedTyping",
+      (data: { chatId: string; userId: string }) => {
+        if (
+          data.chatId === selectedChatId &&
+          data.userId !== loggedInUser?._id
+        ) {
+          setIsTyping(false);
+        }
+      },
+    );
 
     return () => {
       socket?.off("newMessage");
@@ -353,11 +416,11 @@ const ChatApp = () => {
       socket?.off("userTyping");
       socket?.off("userStoppedTyping");
     };
-  }, [socket, selectedUser, setChats, loggedInUser?._id]);
+  }, [socket, selectedChatId, setChats, loggedInUser?._id]);
 
   useEffect(() => {
     const loadChat = async () => {
-      if (!selectedUser || !isAuth) {
+      if (!selectedChatId || !isAuth) {
         setMessages(null);
         setUser(null);
         setIsTyping(false);
@@ -366,20 +429,18 @@ const ChatApp = () => {
 
       await fetchChat();
       setIsTyping(false);
-
-      resetUnseenCount(selectedUser);
-
-      socket?.emit("joinChat", selectedUser);
+      resetUnseenCount(selectedChatId);
+      socket?.emit("joinChat", selectedChatId);
     };
 
-    loadChat();
+    void loadChat();
 
     return () => {
-      if (selectedUser) {
-        socket?.emit("leaveChat", selectedUser);
+      if (selectedChatId) {
+        socket?.emit("leaveChat", selectedChatId);
       }
     };
-  }, [selectedUser, socket, isAuth]);
+  }, [selectedChatId, socket, isAuth]);
 
   useEffect(() => {
     return () => {
@@ -389,13 +450,12 @@ const ChatApp = () => {
     };
   }, [typingTimeOut]);
 
-  // Không render gì nếu chưa auth
   if (loading || !isAuth) {
     return <Loading />;
   }
 
   return (
-    <div className="min-h-screen flex bg-gray-900 text-white overflow-hidden">
+    <div className="min-h-screen flex overflow-hidden bg-gray-900 text-white">
       <ChatSidebar
         sidebarOpen={siderbarOpen}
         setSidebarOpen={setSiderbarOpen}
@@ -404,35 +464,48 @@ const ChatApp = () => {
         users={users}
         loggedInUser={loggedInUser}
         chats={chats}
-        selectedUser={selectedUser}
-        setSelectedUser={setSelectedUser}
+        selectedChatId={selectedChatId}
+        setSelectedChatId={setSelectedChatId}
         handleLogout={handleLogout}
         createChat={createChat}
         onlineUsers={onlineUsers}
       />
-      <div className="flex-1 flex flex-col justify-between p-4 backdrop-blur-xl bg-white/5 border border-white/10">
-        {/* Chat content here */}
+      <div className="flex flex-1 flex-col justify-between border border-white/10 bg-white/5 p-4 backdrop-blur-xl">
         <ChatHeader
           user={user}
+          selectedChatId={selectedChatId}
           setSidebarOpen={setSiderbarOpen}
           isTyping={isTyping}
           onlineUsers={onlineUsers}
+          onStartVideoCall={() => {
+            void handleStartVideoCall();
+          }}
+          isStartingCall={isStartingCall}
+          isCallBusy={isCallBusy}
         />
 
         <ChatMessages
-          selectedUser={selectedUser}
+          selectedChatId={selectedChatId}
           messages={messages}
           loggedInUser={loggedInUser}
         />
 
         <MessageInput
-          selectedUser={selectedUser}
+          selectedChatId={selectedChatId}
           message={message}
           setMessage={handleTyping}
           handleMessageSend={handleMessageSend}
         />
       </div>
     </div>
+  );
+};
+
+const ChatApp = () => {
+  return (
+    <Suspense fallback={<Loading />}>
+      <ChatAppContent />
+    </Suspense>
   );
 };
 
