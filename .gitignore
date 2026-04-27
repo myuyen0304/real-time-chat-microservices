@@ -24,6 +24,7 @@ backend/*/dist/
 *.pfx
 id_rsa*
 id_ed25519*
+secrets/
 
 # Debug
 npm-debug.log*
@@ -57,4 +58,5 @@ CLAUDE.md
 CHECKLIST_7_DAYS.md
 FIX_TRACKER.md
 note.md
+secret.txt
 myCV/
