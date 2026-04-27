@@ -1,6 +1,8 @@
 name: Deploy Production
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -41,7 +43,7 @@ jobs:
   deploy:
     name: Deploy over SSH
     needs: validate
-    if: ${{ !inputs.dry_run }}
+    if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
     runs-on: ubuntu-latest
     environment: production
     steps:
