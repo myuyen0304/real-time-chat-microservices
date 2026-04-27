@@ -257,7 +257,17 @@ export const finalizeCall = async ({
     let summaryMessage = null;
 
     if (!call.summaryWrittenAt) {
-      summaryMessage = await createCallSummaryMessage(call);
+      // Atomic claim: only the request that successfully sets summaryWrittenAt
+      // writes the message. Concurrent requests get null back and skip creation.
+      const claimed = await Call.findOneAndUpdate(
+        { _id: call._id, summaryWrittenAt: { $exists: false } },
+        { $set: { summaryWrittenAt: endedAt } },
+      );
+      if (claimed) {
+        summaryMessage = await createCallSummaryMessage(call);
+      }
+      // Always sync in-memory so the following save() doesn't overwrite
+      // the value that was already written to the DB by the winner.
       call.summaryWrittenAt = endedAt;
     }
 
@@ -268,4 +278,44 @@ export const finalizeCall = async ({
 
   await call.save();
   return { call, summaryMessage: null, changed: true };
+};
+
+/**
+ * Called once at startup to expire ringing calls that were left open when the
+ * server last shut down. Their in-process ring timeouts are gone, so without
+ * this they would stay in "ringing" status indefinitely.
+ */
+export const cleanupStaleRingingCalls = async (
+  ringTimeoutSeconds: number,
+): Promise<void> => {
+  const cutoff = new Date(Date.now() - ringTimeoutSeconds * 1000);
+
+  const staleCalls = await Call.find({
+    status: "ringing",
+    createdAt: { $lt: cutoff },
+  });
+
+  if (staleCalls.length === 0) {
+    return;
+  }
+
+  console.log(
+    `[chat] Marking ${staleCalls.length} stale ringing call(s) as missed`,
+  );
+
+  for (const staleCall of staleCalls) {
+    try {
+      await finalizeCall({
+        callId: staleCall._id.toString(),
+        status: "missed",
+        endReason: "missed",
+        expectedCurrentStatuses: ["ringing"],
+      });
+    } catch (error) {
+      console.error(
+        `[chat] Failed to clean up stale call ${staleCall._id}`,
+        error,
+      );
+    }
+  }
 };

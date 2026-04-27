@@ -5,6 +5,7 @@ import {
   ReactNode,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import { io, Socket } from "socket.io-client";
@@ -26,20 +27,17 @@ interface ProviderProps {
 }
 
 export const SocketProvider = ({ children }: ProviderProps) => {
-  const [socket, setSocket] = useState<Socket | null>(null);
   const { user } = useAppData();
   const [onlineUsers, setOnlineUsers] = useState<string[]>([]);
 
-  useEffect(() => {
+  const socket = useMemo(() => {
     const token = Cookies.get("token");
 
     if (!user?._id || !token) {
-      setSocket(null);
-      setOnlineUsers([]);
-      return;
+      return null;
     }
 
-    const newSocket = io(chat_service, {
+    return io(chat_service, {
       autoConnect: false,
       reconnection: true,
       tryAllTransports: true,
@@ -47,23 +45,29 @@ export const SocketProvider = ({ children }: ProviderProps) => {
         token,
       },
     });
+  }, [user?._id]);
 
-    newSocket.on("connect", () => {
+  useEffect(() => {
+    if (!socket || !user?._id) {
+      return;
+    }
+
+    socket.on("connect", () => {
       setOnlineUsers([]);
-      newSocket.emit("syncOnlineUsers");
+      socket.emit("syncOnlineUsers");
     });
 
-    newSocket.on("getOnlineUser", (users: string[]) => {
+    socket.on("getOnlineUser", (users: string[]) => {
       setOnlineUsers(users);
     });
 
-    newSocket.on("disconnect", () => {
+    socket.on("disconnect", () => {
       setOnlineUsers((currentUsers) =>
         currentUsers.filter((onlineUserId) => onlineUserId !== user._id),
       );
     });
 
-    newSocket.on("connect_error", (error) => {
+    socket.on("connect_error", (error) => {
       setOnlineUsers([]);
 
       if (error.message.startsWith("Authentication failed")) {
@@ -74,17 +78,17 @@ export const SocketProvider = ({ children }: ProviderProps) => {
       console.warn("Socket connection retrying", error.message);
     });
 
-    setSocket(newSocket);
-    newSocket.connect();
+    socket.connect();
 
     return () => {
-      newSocket.off("connect");
-      newSocket.off("getOnlineUser");
-      newSocket.off("disconnect");
-      newSocket.off("connect_error");
-      newSocket.disconnect();
+      socket.off("connect");
+      socket.off("getOnlineUser");
+      socket.off("disconnect");
+      socket.off("connect_error");
+      socket.disconnect();
+      setOnlineUsers([]);
     };
-  }, [user?._id]);
+  }, [socket, user?._id]);
 
   return (
     <SocketContext.Provider value={{ socket, onlineUsers }}>

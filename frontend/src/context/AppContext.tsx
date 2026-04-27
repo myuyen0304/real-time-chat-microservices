@@ -11,7 +11,7 @@ import toast, { Toaster } from "react-hot-toast";
 import Cookies from "js-cookie";
 import axios from "axios";
 
-interface ApiSuccessResponse<T> {
+interface ApiSuccessResponse {
   success: true;
   message: string;
   [key: string]: unknown;
@@ -35,23 +35,78 @@ export interface User {
   email: string;
 }
 
+export type ChatType = "direct" | "group";
+
+export interface ChatLatestMessage {
+  text: string;
+  sender: string;
+}
+
 export interface Chat {
   _id: string;
+  chatType: ChatType;
   users: string[];
-  latestMessage: {
-    text: string;
-    sender: string;
-  };
+  groupName?: string;
+  groupAvatar?: string;
+  latestMessage?: ChatLatestMessage | null;
   createdAt: string;
   updatedAt: string;
   unseenCount?: number;
 }
 
-export interface Chats {
+export interface Message {
   _id: string;
-  user: User;
-  chat: Chat;
+  chatId: string;
+  sender: string;
+  text?: string;
+  image?: {
+    url: string;
+    publicId: string;
+  };
+  call?: {
+    callId: string;
+    mode: "video";
+    status: "declined" | "missed" | "ended" | "cancelled";
+    endReason?: "declined" | "missed" | "hangup" | "disconnect" | "cancelled";
+    durationSeconds?: number;
+    startedAt?: string;
+    endedAt?: string;
+    initiatedBy: string;
+    endedBy?: string;
+  };
+  messageType: "text" | "image" | "call";
+  readBy?: {
+    userId: string;
+    readAt: string;
+  }[];
+  seen: boolean;
+  seenAt?: string;
+  createdAt: string;
 }
+
+export interface Chats {
+  chat: Chat;
+  participants: User[];
+}
+
+type ChatApiEntry = {
+  chat: Chat;
+  participants?: User[] | null;
+  user?: User | null;
+};
+
+export const normalizeChatEntry = (chatEntry: ChatApiEntry): Chats => {
+  const participants = Array.isArray(chatEntry.participants)
+    ? chatEntry.participants.filter(Boolean)
+    : chatEntry.user
+      ? [chatEntry.user]
+      : [];
+
+  return {
+    chat: chatEntry.chat,
+    participants,
+  };
+};
 
 interface AppContextType {
   user: User | null;
@@ -109,7 +164,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setUser((data as ApiSuccessResponse<User> & { user: User }).user);
+      setUser((data as ApiSuccessResponse & { user: User }).user);
       setIsAuth(true);
       setLoading(false);
     } catch (error) {
@@ -140,9 +195,10 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setChats(
-        (data as ApiSuccessResponse<Chats[]> & { chats: Chats[] }).chats,
-      );
+      const response = data as ApiSuccessResponse & {
+        chats: ChatApiEntry[];
+      };
+      setChats(response.chats.map(normalizeChatEntry));
     } catch (error) {
       if (isUnauthorizedError(error)) {
         resetAuthState();
@@ -166,7 +222,7 @@ export const AppProvider: React.FC<AppProviderProps> = ({ children }) => {
           Authorization: `Bearer ${token}`,
         },
       });
-      setUsers((data as ApiSuccessResponse<User[]> & { users: User[] }).users);
+      setUsers((data as ApiSuccessResponse & { users: User[] }).users);
     } catch (error) {
       if (isUnauthorizedError(error)) {
         resetAuthState();

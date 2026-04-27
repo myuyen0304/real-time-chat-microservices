@@ -42,9 +42,10 @@ services:
     env_file: ./backend/user/.env
     environment:
       - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=guest
+      - Rabbitmq_Password=guest
       - MONGO_DB_NAME=chat_user_service
       - MONGO_URI=mongodb://mongo:27017/chat_app
-      - REDIS_URL=redis://redis:6379
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -63,6 +64,8 @@ services:
     env_file: ./backend/mail/.env
     environment:
       - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=guest
+      - Rabbitmq_Password=guest
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -78,7 +81,7 @@ services:
       - Rabbitmq_Password=guest
       - MONGO_DB_NAME=chat_chat_service
       - MONGO_URI=mongodb://mongo:27017/chat_app
-      - REDIS_URL=redis://redis:6379
+      - USER_SERVICE=http://user-service:5000
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -103,7 +106,10 @@ services:
       - chat-service
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:-http://localhost}
     ports:
       - "3000:3000"
     depends_on:

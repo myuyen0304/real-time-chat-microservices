@@ -1,7 +1,7 @@
 import type { Request, Response } from "express";
 import TryCatch from "../config/tryCatch.js";
 import { chatEnv } from "../config/env.js";
-import { getUserSocketIds, io } from "../config/socket.js";
+import { evictCallSignalCache, getUserSocketIds, io } from "../config/socket.js";
 import type { AuthenticatedRequest } from "../middleware/isAuth.js";
 import { Chat } from "../model/Chat.js";
 import { Call } from "../model/Call.js";
@@ -137,6 +137,7 @@ const scheduleMissedCallTimeout = (callId: string) => {
       return;
     }
 
+    evictCallSignalCache(callId);
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:ended", {
       call: serializeCall(result.call),
@@ -159,6 +160,12 @@ const isParticipantInChat = (chatUsers: string[], userId: string): boolean => {
     (participantId) => participantId.toString() === userId.toString(),
   );
 };
+
+const isDuplicateKeyError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  (error as { code: unknown }).code === 11000;
 
 export const initiateVideoCall = TryCatch(
   async (req: CallRequest, res: Response) => {
@@ -221,17 +228,25 @@ export const initiateVideoCall = TryCatch(
       return;
     }
 
-    const [recipient, call] = await Promise.all([
-      getParticipantInfo(recipientId.toString()),
-      Call.create({
+    let call;
+    try {
+      call = await Call.create({
         chatId,
         initiatorId: user._id,
         recipientId,
         participants: [user._id, recipientId],
         mode: "video",
         status: "ringing",
-      }),
-    ]);
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        respondError(res, 409, "One of the participants already has an active call");
+        return;
+      }
+      throw error;
+    }
+
+    const recipient = await getParticipantInfo(recipientId.toString());
 
     scheduleMissedCallTimeout(call._id.toString());
 
@@ -371,6 +386,7 @@ export const declineVideoCall = TryCatch(
     }
 
     clearCallRingTimeout(callId);
+    evictCallSignalCache(callId);
 
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:declined", {
@@ -440,6 +456,7 @@ export const endVideoCall = TryCatch(
     }
 
     clearCallRingTimeout(callId);
+    evictCallSignalCache(callId);
 
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:ended", {

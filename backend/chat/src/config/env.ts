@@ -23,8 +23,10 @@ const getOptionalEnv = (name: string, fallback: string): string => {
 
 export const chatEnv = {
   PORT: getRequiredEnv("PORT"),
+  CORS_ORIGIN: getOptionalEnv("CORS_ORIGIN", "http://localhost:3000"),
   MONGO_URI: getRequiredEnv("MONGO_URI"),
   MONGO_DB_NAME: getOptionalEnv("MONGO_DB_NAME", "ChatappMicroservice"),
+  USER_SERVICE: getRequiredEnv("USER_SERVICE"),
   REDIS_URL: getRequiredEnv("REDIS_URL"),
   CALL_RING_TIMEOUT_SECONDS: Number.parseInt(
     getOptionalEnv("CALL_RING_TIMEOUT_SECONDS", "30"),

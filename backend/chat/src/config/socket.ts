@@ -21,6 +21,11 @@ const app = express();
 const server = http.createServer(app);
 const userSocketMap = new Map<string, Set<string>>();
 
+// Caches the two participant IDs for each active call so that subsequent
+// WebRTC signals (offer, answer, ICE candidates) skip the DB round-trip.
+// Populated on the first signal for a given callId; cleared on call end.
+const callParticipantCache = new Map<string, string[]>();
+
 interface SocketUser {
   _id: string;
   name: string;
@@ -31,15 +36,33 @@ interface AuthenticatedSocket extends Socket {
   data: Socket["data"] & { user?: SocketUser };
 }
 
+const allowedOrigins = chatEnv.CORS_ORIGIN.split(",").map((s) => s.trim());
+
 const io = new Server(server, {
   cors: {
-    origin: "*",
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
   },
 });
 
 const pubClient = createClient({ url: chatEnv.REDIS_URL });
 const subClient = pubClient.duplicate();
+
+pubClient.on("error", (error) => {
+  console.error("[chat-service] Redis pub client error", error);
+});
+
+pubClient.on("reconnecting", () => {
+  console.warn("[chat-service] Redis pub client reconnecting");
+});
+
+subClient.on("error", (error) => {
+  console.error("[chat-service] Redis sub client error", error);
+});
+
+subClient.on("reconnecting", () => {
+  console.warn("[chat-service] Redis sub client reconnecting");
+});
 
 const getOnlineUsers = (): string[] => Array.from(userSocketMap.keys());
 
@@ -76,24 +99,23 @@ const relayCallSignal = async ({
     | "call:signal:ice-candidate";
   payload: Record<string, unknown>;
 }) => {
-  const call = await Call.findById(callId);
+  let participantIds = callParticipantCache.get(callId);
 
-  if (!call) {
+  if (!participantIds) {
+    // First signal for this call — hit the DB once to validate and populate cache.
+    const call = await Call.findById(callId);
+    if (!call || !isActiveCallStatus(call.status)) {
+      return;
+    }
+    participantIds = getCallParticipantIds(call);
+    callParticipantCache.set(callId, participantIds);
+  }
+
+  if (!participantIds.includes(socketUserId)) {
     return;
   }
 
-  if (!getCallParticipantIds(call).includes(socketUserId)) {
-    return;
-  }
-
-  if (!isActiveCallStatus(call.status)) {
-    return;
-  }
-
-  const recipientId = getCallParticipantIds(call).find(
-    (participantId) => participantId !== socketUserId,
-  );
-
+  const recipientId = participantIds.find((id) => id !== socketUserId);
   if (!recipientId) {
     return;
   }
@@ -106,46 +128,58 @@ const relayCallSignal = async ({
 };
 
 const handleDisconnectedCalls = async (userId: string) => {
-  const activeCalls = await Call.find({
-    participants: userId,
-    status: { $in: ["ringing", "accepted"] },
-  });
+  let activeCalls;
+
+  try {
+    activeCalls = await Call.find({
+      participants: userId,
+      status: { $in: ["ringing", "accepted"] },
+    });
+  } catch (error) {
+    console.error(`[socket] Failed to query active calls for user ${userId} on disconnect`, error);
+    return;
+  }
 
   for (const activeCall of activeCalls) {
-    const targetStatus =
-      activeCall.status === "ringing" ? "cancelled" : "ended";
-    const endReason =
-      activeCall.status === "ringing" ? "cancelled" : "disconnect";
+    try {
+      const targetStatus =
+        activeCall.status === "ringing" ? "cancelled" : "ended";
+      const endReason =
+        activeCall.status === "ringing" ? "cancelled" : "disconnect";
 
-    const result = await finalizeCall({
-      callId: activeCall._id.toString(),
-      status: targetStatus,
-      endedBy: userId,
-      endReason,
-      expectedCurrentStatuses: ["ringing", "accepted"],
-    });
-
-    const finalizedCall = result.call;
-
-    if (!finalizedCall || !result.changed) {
-      continue;
-    }
-
-    clearCallRingTimeout(finalizedCall._id.toString());
-
-    const participantIds = getCallParticipantIds(finalizedCall);
-    participantIds.forEach((participantId) => {
-      io.to(participantId).emit("call:ended", {
-        call: serializeCall(finalizedCall),
+      const result = await finalizeCall({
+        callId: activeCall._id.toString(),
+        status: targetStatus,
         endedBy: userId,
-        reason: endReason,
+        endReason,
+        expectedCurrentStatuses: ["ringing", "accepted"],
       });
-    });
-    emitCallSummaryMessage(
-      finalizedCall.chatId.toString(),
-      participantIds,
-      result.summaryMessage,
-    );
+
+      const finalizedCall = result.call;
+
+      if (!finalizedCall || !result.changed) {
+        continue;
+      }
+
+      clearCallRingTimeout(finalizedCall._id.toString());
+      callParticipantCache.delete(finalizedCall._id.toString());
+
+      const participantIds = getCallParticipantIds(finalizedCall);
+      participantIds.forEach((participantId) => {
+        io.to(participantId).emit("call:ended", {
+          call: serializeCall(finalizedCall),
+          endedBy: userId,
+          reason: endReason,
+        });
+      });
+      emitCallSummaryMessage(
+        finalizedCall.chatId.toString(),
+        participantIds,
+        result.summaryMessage,
+      );
+    } catch (error) {
+      console.error(`[socket] Failed to finalize call ${activeCall._id} on disconnect`, error);
+    }
   }
 };
 
@@ -231,6 +265,10 @@ export const getReceiverSocketId = async (
 
 export const getUserSocketIds = (userId: string): string[] => {
   return Array.from(userSocketMap.get(userId) ?? []);
+};
+
+export const evictCallSignalCache = (callId: string): void => {
+  callParticipantCache.delete(callId);
 };
 
 io.on("connection", async (socket: AuthenticatedSocket) => {
@@ -375,7 +413,11 @@ io.on("connection", async (socket: AuthenticatedSocket) => {
       broadcastOnlineUsers();
 
       if (shouldFinalizeCalls) {
-        await handleDisconnectedCalls(userId);
+        try {
+          await handleDisconnectedCalls(userId);
+        } catch (error) {
+          console.error(`[socket] Unexpected error handling disconnected calls for user ${userId}`, error);
+        }
       }
     }
   });

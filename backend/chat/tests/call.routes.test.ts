@@ -199,6 +199,40 @@ const testState = vi.hoisted(() => {
         null
       );
     }),
+    findOneAndUpdate: vi.fn(
+      async (
+        query: Record<string, unknown>,
+        update: { $set?: Partial<StoredCall> },
+      ) => {
+        const call =
+          Array.from(calls.values()).find((storedCall) => {
+            if (query._id && storedCall._id !== query._id) {
+              return false;
+            }
+
+            const summaryCondition = query.summaryWrittenAt;
+            if (
+              summaryCondition &&
+              typeof summaryCondition === "object" &&
+              "$exists" in summaryCondition &&
+              summaryCondition.$exists === false &&
+              storedCall.summaryWrittenAt
+            ) {
+              return false;
+            }
+
+            return true;
+          }) ?? null;
+
+        if (!call) {
+          return null;
+        }
+
+        Object.assign(call, update.$set ?? {});
+        calls.set(call._id, call);
+        return call;
+      },
+    ),
     find: vi.fn(async (query: Record<string, unknown>) => {
       return Array.from(calls.values()).filter((call) =>
         matchQuery(call, query),
@@ -248,6 +282,7 @@ const testState = vi.hoisted(() => {
   const getUserSocketIds = vi.fn(
     (userId: string) => onlineUsers.get(userId) ?? [],
   );
+  const evictCallSignalCache = vi.fn();
 
   const setOnline = (userId: string, socketIds: string[]) => {
     onlineUsers.set(userId, socketIds);
@@ -267,9 +302,11 @@ const testState = vi.hoisted(() => {
     Call.create.mockClear();
     Call.findById.mockClear();
     Call.findOne.mockClear();
+    Call.findOneAndUpdate.mockClear();
     Call.find.mockClear();
     UserSnapshot.findById.mockClear();
     getUserSocketIds.mockClear();
+    evictCallSignalCache.mockClear();
     io.to.mockClear();
   };
 
@@ -284,6 +321,7 @@ const testState = vi.hoisted(() => {
     Messages,
     UserSnapshot,
     getUserSocketIds,
+    evictCallSignalCache,
     io,
     calls,
     messages,
@@ -310,6 +348,7 @@ vi.mock("../src/model/UserSnapshot.js", () => ({
 vi.mock("../src/config/socket.js", () => ({
   io: testState.io,
   getUserSocketIds: testState.getUserSocketIds,
+  evictCallSignalCache: testState.evictCallSignalCache,
 }));
 
 vi.mock("../src/config/env.js", () => ({

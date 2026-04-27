@@ -23,6 +23,7 @@ const getOptionalEnv = (name: string, fallback: string): string => {
 
 export const userEnv = {
   PORT: getRequiredEnv("PORT"),
+  CORS_ORIGIN: getOptionalEnv("CORS_ORIGIN", "http://localhost:3000"),
   MONGO_URI: getRequiredEnv("MONGO_URI"),
   MONGO_DB_NAME: getOptionalEnv("MONGO_DB_NAME", "ChatappMicroservice"),
   REDIS_URL: getRequiredEnv("REDIS_URL"),

@@ -12,10 +12,10 @@ const LoginPage = () => {
   const [loading, setLoading] = useState<boolean>(false);
   const router = useRouter();
 
-  const {isAuth, loading: userLoading} = useAppData();
+  const { isAuth, loading: userLoading } = useAppData();
 
   const handleSubmit = async (
-    e: React.FormEvent<HTMLElement>
+    e: React.FormEvent<HTMLElement>,
   ): Promise<void> => {
     e.preventDefault();
     setLoading(true);
@@ -25,19 +25,21 @@ const LoginPage = () => {
       });
       toast.success(data.message);
       router.push(`/verify?email=${email}`);
-    } catch (error: any) {
+    } catch (error: unknown) {
+      const message = axios.isAxiosError(error)
+        ? error.response?.data?.message
+        : undefined;
       toast.error(
-        error?.response?.data?.message ||
-          "Failed to send OTP. Please try again."
+        message || "Failed to send OTP. Please try again.",
       );
     } finally {
       setLoading(false);
     }
   };
 
-  if(userLoading) return <Loading/>
+  if (userLoading) return <Loading />;
 
-  if(isAuth) return redirect("/chat");
+  if (isAuth) return redirect("/chat");
 
   return (
     <div className="min-h-screen bg-gray-900 flex items-center justify-center">

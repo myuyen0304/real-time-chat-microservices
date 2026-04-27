@@ -1,9 +1,11 @@
-import { User } from "@/context/AppContext";
-import { Loader2, Menu, UserCircle, Video } from "lucide-react";
+import { Chats, User } from "@/context/AppContext";
+import { getChatTitle, getDirectChatPeer, safeCssUrl } from "@/utils/chat";
+import { Loader2, Menu, UserCircle, Users, Video } from "lucide-react";
 import React from "react";
 
 interface ChatHeaderProps {
-  user: User | null;
+  activeChat: Chats | null;
+  loggedInUser: User | null;
   selectedChatId: string | null;
   setSidebarOpen: (open: boolean) => void;
   isTyping: boolean;
@@ -14,7 +16,8 @@ interface ChatHeaderProps {
 }
 
 const ChatHeader = ({
-  user,
+  activeChat,
+  loggedInUser,
   selectedChatId,
   setSidebarOpen,
   isTyping,
@@ -23,9 +26,26 @@ const ChatHeader = ({
   isStartingCall,
   isCallBusy,
 }: ChatHeaderProps) => {
-  const isOnlineUser = user ? onlineUsers.includes(user._id) : false;
+  const directPeer = activeChat
+    ? getDirectChatPeer(activeChat, loggedInUser?._id)
+    : null;
+  const isOnlineUser = directPeer
+    ? onlineUsers.includes(directPeer._id)
+    : false;
+  const title = activeChat ? getChatTitle(activeChat, loggedInUser?._id) : null;
+  const subtitle = activeChat
+    ? activeChat.chat.chatType === "group"
+      ? `${activeChat.participants.length} members`
+      : isOnlineUser
+        ? "Online"
+        : "Offline"
+    : null;
   const canStartCall = Boolean(
-    user && selectedChatId && isOnlineUser && !isCallBusy && !isStartingCall,
+    directPeer &&
+    selectedChatId &&
+    isOnlineUser &&
+    !isCallBusy &&
+    !isStartingCall,
   );
 
   return (
@@ -40,13 +60,30 @@ const ChatHeader = ({
       </div>
       <div className="mb-6 rounded-lg border border-gray-700 bg-gray-800 p-6">
         <div className="flex items-center gap-4">
-          {user ? (
+          {activeChat ? (
             <>
               <div className="relative">
-                <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-700">
-                  <UserCircle className="h-8 w-8 text-gray-300" />
-                </div>
-                {isOnlineUser && (
+                {activeChat.chat.chatType === "group" ? (
+                  <div
+                    className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-700 bg-cover bg-center"
+                    style={
+                      activeChat.chat.groupAvatar
+                        ? {
+                            backgroundImage: safeCssUrl(activeChat.chat.groupAvatar),
+                          }
+                        : undefined
+                    }
+                  >
+                    {!activeChat.chat.groupAvatar && (
+                      <Users className="h-7 w-7 text-gray-300" />
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-full bg-gray-700">
+                    <UserCircle className="h-8 w-8 text-gray-300" />
+                  </div>
+                )}
+                {activeChat.chat.chatType === "direct" && isOnlineUser && (
                   <span className="absolute -bottom-1 -right-1 h-5 w-5 rounded-full border-2 border-gray-800 bg-green-500">
                     <span className="absolute inset-0 rounded-full bg-green-500 opacity-75 animate-ping"></span>
                   </span>
@@ -55,7 +92,7 @@ const ChatHeader = ({
               <div className="min-w-0 flex-1">
                 <div className="flex flex-col gap-1">
                   <h2 className="truncate text-2xl font-bold text-white">
-                    {user.name}
+                    {title}
                   </h2>
                 </div>
 
@@ -79,35 +116,45 @@ const ChatHeader = ({
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <div
-                        className={`h-2 w-2 rounded-full ${
-                          isOnlineUser ? "bg-green-500" : "bg-gray-500"
-                        }`}
-                      ></div>
-                      <span
-                        className={`text-sm font-medium ${
-                          isOnlineUser ? "text-green-500" : "text-gray-400"
-                        }`}
-                      >
-                        {isOnlineUser ? "Online" : "Offline"}
-                      </span>
+                      {activeChat.chat.chatType === "direct" ? (
+                        <>
+                          <div
+                            className={`h-2 w-2 rounded-full ${
+                              isOnlineUser ? "bg-green-500" : "bg-gray-500"
+                            }`}
+                          ></div>
+                          <span
+                            className={`text-sm font-medium ${
+                              isOnlineUser ? "text-green-500" : "text-gray-400"
+                            }`}
+                          >
+                            {subtitle}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-sm font-medium text-gray-400">
+                          {subtitle}
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={onStartVideoCall}
-                disabled={!canStartCall}
-                className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-300 transition-colors hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-gray-500"
-                aria-label="Start video call"
-              >
-                {isStartingCall ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
-                ) : (
-                  <Video className="h-5 w-5" />
-                )}
-              </button>
+              {activeChat.chat.chatType === "direct" && (
+                <button
+                  type="button"
+                  onClick={onStartVideoCall}
+                  disabled={!canStartCall}
+                  className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-500/30 bg-blue-500/10 text-blue-300 transition-colors hover:bg-blue-500/20 disabled:cursor-not-allowed disabled:border-white/10 disabled:bg-white/5 disabled:text-gray-500"
+                  aria-label="Start video call"
+                >
+                  {isStartingCall ? (
+                    <Loader2 className="h-5 w-5 animate-spin" />
+                  ) : (
+                    <Video className="h-5 w-5" />
+                  )}
+                </button>
+              )}
             </>
           ) : (
             <div className="flex items-center gap-4">

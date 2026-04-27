@@ -197,7 +197,7 @@ const VerifyOtp = () => {
 
           <div className="mt-6 text-center ">
             <p className="text-gray-400 text-sm mb-4">
-              Didn't receive the code?
+              Didn&apos;t receive the code?
             </p>
             {timer > 0 ? (
               <p className="text-gray-400 text-sm">

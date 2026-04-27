@@ -22,6 +22,10 @@ export interface IMessage extends Document {
   };
   call?: CallMessagePayload;
   messageType: "text" | "image" | "call";
+  readBy: {
+    userId: string;
+    readAt: Date;
+  }[];
   seen: boolean;
   seenAt: Date | null;
   createdAt: Date;
@@ -69,6 +73,18 @@ const schema = new Schema<IMessage>(
       enum: ["text", "image", "call"],
       default: "text",
     },
+    readBy: [
+      {
+        userId: {
+          type: String,
+          required: true,
+        },
+        readAt: {
+          type: Date,
+          required: true,
+        },
+      },
+    ],
     seen: {
       type: Boolean,
       default: false,
@@ -82,5 +98,7 @@ const schema = new Schema<IMessage>(
     timestamps: true,
   },
 );
+
+schema.index({ chatId: 1, "readBy.userId": 1 });
 
 export const Messages = mongoose.model<IMessage>("Messages", schema);

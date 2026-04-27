@@ -166,7 +166,7 @@ Hai service co the van dung chung mot MongoDB server, nhung nen tach database lo
 Nginx gateway forward các route sau:
 
 - User service: `/api/v1/login`, `/api/v1/verify`, `/api/v1/me`, `/api/v1/update`, `/api/v1/user`
-- Chat service: `/api/v1/chat`, `/api/v1/message`, `/socket.io/`
+- Chat service: `/api/v1/chat`, `/api/v1/message`, `/api/v1/call`, `/socket.io/`
 
 Frontend mặc định gọi gateway qua `NEXT_PUBLIC_GATEWAY_URL`, fallback về `http://localhost:80`.
 
@@ -184,6 +184,8 @@ JWT_PUBLIC_KEY=<run: node scripts/generate-keys.mjs>
 Rabbitmq_Host=localhost
 Rabbitmq_Username=guest
 Rabbitmq_Password=guest
+# CORS — mặc định localhost:3000. Production: đặt domain thật (phân cách bằng dấu phẩy nếu nhiều origin)
+# CORS_ORIGIN=https://yourdomain.com
 ```
 
 ### backend/chat/.env
@@ -193,6 +195,7 @@ PORT=5002
 REDIS_URL=redis://localhost:6379
 MONGO_URI=mongodb://localhost:27017/chat_app
 MONGO_DB_NAME=chat_chat_service
+USER_SERVICE=http://localhost:5000
 JWT_PUBLIC_KEY=<run: node scripts/generate-keys.mjs>
 Rabbitmq_Host=localhost
 Rabbitmq_Username=guest
@@ -200,6 +203,8 @@ Rabbitmq_Password=guest
 CLOUD_NAME=your_cloudinary_cloud_name
 API_KEY=your_cloudinary_api_key
 API_SECRET=your_cloudinary_api_secret
+# CORS — mặc định localhost:3000. Production: đặt domain thật (phân cách bằng dấu phẩy nếu nhiều origin)
+# CORS_ORIGIN=https://yourdomain.com
 ```
 
 ### backend/mail/.env
@@ -299,7 +304,7 @@ cd frontend && npm run dev
 
 - Backend dùng TypeScript với `type: module`.
 - Import trong backend dùng hậu tố `.js` theo ESM / NodeNext.
-- Repository hiện chưa có test suite.
+- Backend có test suite dùng Vitest (xem `backend/user/tests` và `backend/chat/tests`).
 - `mail-service` là worker, không phải public API service.
 - Upload ảnh dùng `multer` + `multer-storage-cloudinary`, giới hạn 5MB.
 

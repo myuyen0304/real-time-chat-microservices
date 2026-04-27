@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import { Loader2, Mic, MicOff, PhoneOff, Video, VideoOff } from "lucide-react";
 import { User } from "@/context/AppContext";
 
@@ -11,6 +11,7 @@ interface VideoCallOverlayProps {
   peer: User;
   localStream: MediaStream | null;
   remoteStream: MediaStream | null;
+  hasRemoteVideo: boolean;
   isMuted: boolean;
   isCameraEnabled: boolean;
   onEnd: () => void;
@@ -29,6 +30,7 @@ const VideoCallOverlay = ({
   peer,
   localStream,
   remoteStream,
+  hasRemoteVideo,
   isMuted,
   isCameraEnabled,
   onEnd,
@@ -48,10 +50,6 @@ const VideoCallOverlay = ({
     if (remoteVideoRef.current) {
       remoteVideoRef.current.srcObject = remoteStream;
     }
-  }, [remoteStream]);
-
-  const hasRemoteVideo = useMemo(() => {
-    return Boolean(remoteStream && remoteStream.getVideoTracks().length > 0);
   }, [remoteStream]);
 
   return (

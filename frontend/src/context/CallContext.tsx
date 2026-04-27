@@ -197,6 +197,7 @@ export const CallProvider = ({ children }: CallProviderProps) => {
   );
   const [localStream, setLocalStream] = useState<MediaStream | null>(null);
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraEnabled, setIsCameraEnabled] = useState(true);
   const [isStartingCall, setIsStartingCall] = useState(false);
@@ -206,6 +207,8 @@ export const CallProvider = ({ children }: CallProviderProps) => {
   const localStreamRef = useRef<MediaStream | null>(null);
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
+  const pendingIceCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const remoteDescriptionSetRef = useRef<boolean>(false);
   const socketRef = useRef(socket);
   const fetchChatsRef = useRef(fetchChats);
 
@@ -245,10 +248,24 @@ export const CallProvider = ({ children }: CallProviderProps) => {
     stopStreamTracks(remoteStreamRef.current);
     localStreamRef.current = null;
     remoteStreamRef.current = null;
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
     setLocalStream(null);
     setRemoteStream(null);
+    setHasRemoteVideo(false);
     setIsMuted(false);
     setIsCameraEnabled(true);
+  };
+
+  const drainIceCandidateBuffer = async (peerConnection: RTCPeerConnection) => {
+    const buffered = pendingIceCandidatesRef.current.splice(0);
+    for (const candidate of buffered) {
+      try {
+        await peerConnection.addIceCandidate(candidate);
+      } catch (error) {
+        console.error("Failed to add buffered ICE candidate", error);
+      }
+    }
   };
 
   const syncChats = async () => {
@@ -315,6 +332,9 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       return peerConnectionRef.current;
     }
 
+    pendingIceCandidatesRef.current = [];
+    remoteDescriptionSetRef.current = false;
+
     const nextLocalStream = await ensureLocalStream();
     const nextPeerConnection = new RTCPeerConnection({
       iceServers: getIceServers(),
@@ -357,6 +377,10 @@ export const CallProvider = ({ children }: CallProviderProps) => {
             activeRemoteStream.addTrack(track);
           }
         });
+      }
+
+      if (event.track.kind === "video") {
+        setHasRemoteVideo(true);
       }
 
       setCurrentCall((existingCall) =>
@@ -493,6 +517,10 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       return;
     }
 
+    // Dismiss the UI immediately — don't wait for the socket event, which may
+    // be delayed or lost entirely if the connection is unreliable.
+    clearCallState();
+
     try {
       await axios.post(
         `${chat_service}/api/v1/call/${activeCall.call._id}/end`,
@@ -596,6 +624,8 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       try {
         const peerConnection = await ensurePeerConnection(payload.callId);
         await peerConnection.setRemoteDescription(payload.sdp);
+        remoteDescriptionSetRef.current = true;
+        await drainIceCandidateBuffer(peerConnection);
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
         socket.emit("call:signal:answer", {
@@ -620,6 +650,8 @@ export const CallProvider = ({ children }: CallProviderProps) => {
       try {
         const peerConnection = await ensurePeerConnection(payload.callId);
         await peerConnection.setRemoteDescription(payload.sdp);
+        remoteDescriptionSetRef.current = true;
+        await drainIceCandidateBuffer(peerConnection);
         setCurrentCall((existingCall) =>
           existingCall && existingCall.call._id === payload.callId
             ? { ...existingCall, phase: "connecting" }
@@ -640,11 +672,18 @@ export const CallProvider = ({ children }: CallProviderProps) => {
         return;
       }
 
+      if (!payload.candidate) {
+        return;
+      }
+
+      if (!remoteDescriptionSetRef.current) {
+        pendingIceCandidatesRef.current.push(payload.candidate);
+        return;
+      }
+
       try {
         const peerConnection = await ensurePeerConnection(payload.callId);
-        if (payload.candidate) {
-          await peerConnection.addIceCandidate(payload.candidate);
-        }
+        await peerConnection.addIceCandidate(payload.candidate);
       } catch (error) {
         console.error("Failed to add ICE candidate", error);
       }
@@ -712,6 +751,7 @@ export const CallProvider = ({ children }: CallProviderProps) => {
           peer={currentCall.peer}
           localStream={localStream}
           remoteStream={remoteStream}
+          hasRemoteVideo={hasRemoteVideo}
           isMuted={isMuted}
           isCameraEnabled={isCameraEnabled}
           onEnd={() => {

@@ -1,5 +1,5 @@
 import { Loader2, Paperclip, Send, X } from "lucide-react";
-import React, { useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 interface MessageInputProps {
   selectedChatId: string | null;
@@ -16,7 +16,20 @@ const MessageInput = ({
 }: MessageInputProps) => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [isUploading, setIsUploading] = useState(false);
-  const handleSubmit = async (e: any) => {
+  const previewUrl = useMemo(
+    () => (imageFile ? URL.createObjectURL(imageFile) : null),
+    [imageFile],
+  );
+
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!message.trim() && !imageFile) return;
     setIsUploading(true);
@@ -34,10 +47,10 @@ const MessageInput = ({
       className="flex flex-col gap-2 border-t border-gray-700 pt-2"
       action=""
     >
-      {imageFile && (
+      {imageFile && previewUrl && (
         <div className="relative w-fit">
           <img
-            src={URL.createObjectURL(imageFile)}
+            src={previewUrl}
             alt="preview"
             className="w-24 h-24 object-cover rounded-lg border border-gray-600"
           />

@@ -49,7 +49,10 @@ const testState = vi.hoisted(() => {
   type SnapshotUser = { _id: string; name: string; email: string };
   type StoredChat = {
     _id: string;
+    chatType: "direct" | "group";
     users: string[];
+    groupName?: string;
+    groupAvatar?: string;
     latestMessage?: { text: string; sender: string } | null;
     updatedAt: Date;
     toObject: () => Record<string, unknown>;
@@ -60,6 +63,7 @@ const testState = vi.hoisted(() => {
     sender: string;
     text?: string;
     messageType: "text" | "image";
+    readBy: Array<{ userId: string; readAt: Date }>;
     seen: boolean;
     seenAt?: Date;
     image?: { url: string; publicId: string };
@@ -89,30 +93,57 @@ const testState = vi.hoisted(() => {
         return actual !== expected.$ne;
       }
 
+      if (
+        key === "readBy" &&
+        isObject(expected) &&
+        isObject(expected.$not) &&
+        isObject(expected.$not.$elemMatch)
+      ) {
+        const receipts = Array.isArray(actual) ? actual : [];
+        return !receipts.some((receipt) =>
+          matchesCondition(
+            receipt as Record<string, unknown>,
+            expected.$not.$elemMatch as Record<string, unknown>,
+          ),
+        );
+      }
+
       return actual === expected;
     });
   };
 
   const buildChat = ({
     _id,
+    chatType = "direct",
     users,
+    groupName,
+    groupAvatar,
     latestMessage = null,
     updatedAt = new Date("2026-01-01T00:00:00.000Z"),
   }: {
     _id?: string;
+    chatType?: "direct" | "group";
     users: string[];
+    groupName?: string;
+    groupAvatar?: string;
     latestMessage?: { text: string; sender: string } | null;
     updatedAt?: Date;
   }) => {
     const chatId = _id ?? `${nextChatId++}`.padStart(24, "0");
     const chat: StoredChat = {
       _id: chatId,
+      chatType,
       users,
+      groupName,
+      groupAvatar,
       latestMessage,
       updatedAt,
       toObject: () => ({
         _id: chatId,
+        chatType,
         users: [...users],
+        groupName,
+        groupAvatar,
         latestMessage,
         updatedAt,
       }),
@@ -127,6 +158,7 @@ const testState = vi.hoisted(() => {
     chatId,
     sender,
     text,
+    readBy = [],
     seen = false,
     seenAt,
     image,
@@ -137,6 +169,7 @@ const testState = vi.hoisted(() => {
     chatId: string;
     sender: string;
     text?: string;
+    readBy?: Array<{ userId: string; readAt: Date }>;
     seen?: boolean;
     seenAt?: Date;
     image?: { url: string; publicId: string };
@@ -149,6 +182,7 @@ const testState = vi.hoisted(() => {
       chatId,
       sender,
       text,
+      readBy,
       seen,
       seenAt,
       image,
@@ -166,10 +200,27 @@ const testState = vi.hoisted(() => {
 
   const Chat = {
     findOne: vi.fn(
-      async (query: { users: { $all: string[]; $size: number } }) => {
+      async (query: {
+        chatType?: "direct" | "group";
+        $or?: Array<{ chatType: "direct" } | { chatType: { $exists: false } }>;
+        users: { $all: string[]; $size: number };
+      }) => {
         return (
           Array.from(chats.values()).find((chat) => {
+            const matchesChatType = query.$or
+              ? query.$or.some((condition) => {
+                  if ("chatType" in condition && condition.chatType === "direct") {
+                    return chat.chatType === "direct";
+                  }
+
+                  return false;
+                })
+              : query.chatType
+                ? chat.chatType === query.chatType
+                : true;
+
             return (
+              matchesChatType &&
               chat.users.length === query.users.$size &&
               query.users.$all.every((userId) => chat.users.includes(userId))
             );
@@ -177,9 +228,21 @@ const testState = vi.hoisted(() => {
         );
       },
     ),
-    create: vi.fn(async ({ users }: { users: string[] }) => {
-      return buildChat({ users });
-    }),
+    create: vi.fn(
+      async ({
+        chatType = "direct",
+        users,
+        groupName,
+        groupAvatar,
+      }: {
+        chatType?: "direct" | "group";
+        users: string[];
+        groupName?: string;
+        groupAvatar?: string;
+      }) => {
+        return buildChat({ chatType, users, groupName, groupAvatar });
+      },
+    ),
     findById: vi.fn(async (id: string) => chats.get(String(id)) ?? null),
     findByIdAndUpdate: vi.fn(
       async (
@@ -267,7 +330,27 @@ const testState = vi.hoisted(() => {
         if (
           matchesCondition(message as unknown as Record<string, unknown>, query)
         ) {
-          Object.assign(message, update);
+          if ("$addToSet" in update && isObject(update.$addToSet)) {
+            const readBy = update.$addToSet.readBy;
+            if (isObject(readBy)) {
+              const alreadyRead = message.readBy.some(
+                (receipt) => receipt.userId === readBy.userId,
+              );
+              if (!alreadyRead) {
+                message.readBy.push(
+                  readBy as { userId: string; readAt: Date },
+                );
+              }
+            }
+          }
+
+          if ("$set" in update && isObject(update.$set)) {
+            Object.assign(message, update.$set);
+          }
+
+          if (!("$addToSet" in update) && !("$set" in update)) {
+            Object.assign(message, update);
+          }
           messages.set(message._id, message);
           modifiedCount += 1;
         }
@@ -284,6 +367,11 @@ const testState = vi.hoisted(() => {
 
   const UserSnapshot = {
     findById: vi.fn(async (id: string) => snapshots.get(String(id)) ?? null),
+    find: vi.fn(async (query: { _id: { $in: string[] } }) => {
+      return query._id.$in
+        .map((id) => snapshots.get(String(id)))
+        .filter((user): user is SnapshotUser => Boolean(user));
+    }),
     findByIdAndUpdate: vi.fn(
       async (id: string, payload: { name: string; email: string }) => {
         const nextValue = { _id: id, ...payload };
@@ -343,6 +431,7 @@ const testState = vi.hoisted(() => {
     Messages.updateMany.mockClear();
     Messages.countDocuments.mockClear();
     UserSnapshot.findById.mockClear();
+    UserSnapshot.find.mockClear();
     UserSnapshot.findByIdAndUpdate.mockClear();
     io.to.mockClear();
     getUserSocketIds.mockClear();
@@ -464,6 +553,7 @@ describe("chat service routes", () => {
       chatId: "000000000000000000000001",
     });
     expect(testState.Chat.create).toHaveBeenCalledWith({
+      chatType: "direct",
       users: [loggedInUser._id, otherUser._id],
     });
   });
@@ -484,6 +574,36 @@ describe("chat service routes", () => {
       success: false,
       message: "Chat already existed",
       chatId: existingChat._id,
+    });
+    expect(testState.Chat.findOne).toHaveBeenCalledWith({
+      $or: [{ chatType: "direct" }, { chatType: { $exists: false } }],
+      users: { $all: [loggedInUser._id, otherUser._id], $size: 2 },
+    });
+  });
+
+  it("creates a group chat with metadata and unique participants", async () => {
+    const response = await request(app)
+      .post("/api/v1/chat/new")
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({
+        chatType: "group",
+        groupName: "Project Squad",
+        groupAvatar: "https://example.com/group.png",
+        userIds: [otherUser._id, outsider._id, loggedInUser._id],
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toEqual({
+      success: true,
+      message: "New chat created",
+      chatId: "000000000000000000000001",
+    });
+    expect(testState.Chat.findOne).not.toHaveBeenCalled();
+    expect(testState.Chat.create).toHaveBeenCalledWith({
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupName: "Project Squad",
+      groupAvatar: "https://example.com/group.png",
     });
   });
 
@@ -528,6 +648,58 @@ describe("chat service routes", () => {
     );
   });
 
+  it("returns chats with explicit participants for direct and group chats", async () => {
+    testState.buildChat({
+      _id: "507f1f77bcf86cd799439032",
+      users: [loggedInUser._id, otherUser._id],
+      latestMessage: { text: "Latest direct", sender: otherUser._id },
+      updatedAt: new Date("2026-01-01T00:03:00.000Z"),
+    });
+    testState.buildChat({
+      _id: "507f1f77bcf86cd799439033",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupName: "Project Squad",
+      groupAvatar: "https://example.com/group.png",
+      latestMessage: { text: "Latest group", sender: outsider._id },
+      updatedAt: new Date("2026-01-01T00:04:00.000Z"),
+    });
+
+    const response = await request(app)
+      .get("/api/v1/chat/all")
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.chats).toHaveLength(2);
+    expect(response.body.chats).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          chat: expect.objectContaining({
+            _id: "507f1f77bcf86cd799439032",
+            chatType: "direct",
+            latestMessage: { text: "Latest direct", sender: otherUser._id },
+          }),
+          participants: expect.arrayContaining([loggedInUser, otherUser]),
+        }),
+        expect.objectContaining({
+          chat: expect.objectContaining({
+            _id: "507f1f77bcf86cd799439033",
+            chatType: "group",
+            groupName: "Project Squad",
+            groupAvatar: "https://example.com/group.png",
+            latestMessage: { text: "Latest group", sender: outsider._id },
+          }),
+          participants: expect.arrayContaining([
+            loggedInUser,
+            otherUser,
+            outsider,
+          ]),
+        }),
+      ]),
+    );
+  });
+
   it("fetches messages for a participant and marks unseen messages as seen", async () => {
     const chat = testState.buildChat({
       _id: "507f1f77bcf86cd799439041",
@@ -558,10 +730,32 @@ describe("chat service routes", () => {
     expect(response.status).toBe(200);
     expect(response.body.success).toBe(true);
     expect(response.body.messages).toHaveLength(2);
-    expect(response.body.user).toEqual(otherUser);
+    expect(response.body.chat).toMatchObject({
+      _id: chat._id,
+      chatType: "direct",
+      users: [loggedInUser._id, otherUser._id],
+    });
+    expect(response.body.participants).toEqual(
+      expect.arrayContaining([loggedInUser, otherUser]),
+    );
     expect(testState.Messages.updateMany).toHaveBeenCalledWith(
-      { chatId: chat._id, sender: { $ne: loggedInUser._id }, seen: false },
-      { seen: true, seenAt: expect.any(Date) },
+      {
+        chatId: chat._id,
+        sender: { $ne: loggedInUser._id },
+        readBy: {
+          $not: {
+            $elemMatch: {
+              userId: loggedInUser._id,
+            },
+          },
+        },
+      },
+      {
+        $addToSet: {
+          readBy: { userId: loggedInUser._id, readAt: expect.any(Date) },
+        },
+        $set: { seenAt: expect.any(Date) },
+      },
     );
     expect(testState.events).toEqual(
       expect.arrayContaining([

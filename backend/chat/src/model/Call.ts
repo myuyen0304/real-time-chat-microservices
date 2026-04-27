@@ -82,4 +82,22 @@ const schema = new Schema<CallFields>(
 
 schema.index({ participants: 1, status: 1 });
 
+// Prevent a user from simultaneously initiating or receiving more than one active call.
+// partialFilterExpression limits the uniqueness constraint to active statuses only,
+// so the same user can appear in multiple historical (terminal) calls.
+schema.index(
+  { initiatorId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ["ringing", "accepted"] } },
+  },
+);
+schema.index(
+  { recipientId: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ["ringing", "accepted"] } },
+  },
+);
+
 export const Call = mongoose.model<CallFields>("Call", schema);

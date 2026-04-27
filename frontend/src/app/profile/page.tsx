@@ -17,7 +17,7 @@ const ProfilePage = () => {
     setIsEdit(!isEdit);
     setName(user?.name);
   };
-  const submitHandler = async (e: any) => {
+  const submitHandler = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const token = Cookies.get("token");
     try {
@@ -39,8 +39,11 @@ const ProfilePage = () => {
       toast.success(data.message);
       setUser(data.user);
       setIsEdit(false);
-    } catch (error: any) {
-      toast.error(error?.response?.data?.message || "Failed to update profile");
+    } catch (error: unknown) {
+      const message = axios.isAxiosError(error)
+        ? error.response?.data?.message
+        : undefined;
+      toast.error(message || "Failed to update profile");
     }
   };
 

@@ -20,6 +20,20 @@ type ChatRequest = Request &
     file?: UploadedMessageFile | undefined;
   };
 
+type DirectCreateChatBody = {
+  chatType?: "direct";
+  otherUserId: string;
+};
+
+type GroupCreateChatBody = {
+  chatType: "group";
+  groupName: string;
+  groupAvatar?: string;
+  userIds: string[];
+};
+
+type CreateChatBody = DirectCreateChatBody | GroupCreateChatBody;
+
 const respondSuccess = (
   res: Response,
   message: string,
@@ -61,15 +75,127 @@ const respondNotFound = (res: Response, resource: string) => {
   respondError(res, 404, `${resource} not found`);
 };
 
+type ChatParticipant = {
+  _id: string;
+  name: string;
+  email: string;
+};
+
+type ReadReceipt = {
+  userId: string;
+  readAt: Date;
+};
+
+type MessageLike = {
+  _id: unknown;
+  sender: string;
+  readBy?: ReadReceipt[];
+  seen?: boolean;
+  seenAt?: Date | null;
+  toObject?: () => Record<string, unknown>;
+};
+
+const buildUnknownParticipant = (participantId: string): ChatParticipant => ({
+  _id: participantId,
+  name: "Unknown User",
+  email: "",
+});
+
+const getChatParticipants = async (
+  participantIds: string[],
+): Promise<ChatParticipant[]> => {
+  const docs = await UserSnapshot.find({ _id: { $in: participantIds } });
+  const byId = new Map(docs.map((d) => [d._id.toString(), d]));
+  return participantIds.map((id) => byId.get(id) ?? buildUnknownParticipant(id));
+};
+
+const isParticipantInChatRoom = (participantId: string, chatId: string) => {
+  const socketIds = getUserSocketIds(participantId);
+  return socketIds.some((socketId) => {
+    const participantSocket = io.sockets.sockets.get(socketId);
+    return Boolean(participantSocket && participantSocket.rooms.has(chatId));
+  });
+};
+
+const hasReadReceipt = (message: MessageLike, userId: string) => {
+  return Boolean(
+    message.readBy?.some((receipt) => receipt.userId.toString() === userId),
+  );
+};
+
+const haveAllReceiversRead = (
+  message: MessageLike,
+  participantIds: string[],
+) => {
+  const receiverIds = participantIds.filter(
+    (participantId) => participantId !== message.sender.toString(),
+  );
+
+  return receiverIds.every((receiverId) => hasReadReceipt(message, receiverId));
+};
+
+const toClientMessage = (message: MessageLike, participantIds: string[]) => {
+  const rawMessage = message.toObject ? message.toObject() : message;
+  const seen = haveAllReceiversRead(message, participantIds);
+  const lastReadReceipt = message.readBy?.[message.readBy.length - 1];
+
+  return {
+    ...rawMessage,
+    seen,
+    seenAt: seen ? (message.seenAt ?? lastReadReceipt?.readAt) : null,
+  };
+};
+
+const buildUnreadMessageQuery = (chatId: unknown, userId: string) => ({
+  chatId,
+  sender: { $ne: userId },
+  readBy: { $not: { $elemMatch: { userId } } },
+});
+
 export const createNewChat = TryCatch(
   async (req: ChatRequest, res: Response) => {
     const userId = req.user?._id;
-    const { otherUserId } = req.body;
+    const payload = req.body as CreateChatBody;
 
     if (!userId) {
       respondUnauthorized(res);
       return;
     }
+
+    if (payload.chatType === "group") {
+      const participantIds = Array.from(
+        new Set([userId.toString(), ...payload.userIds]),
+      );
+      const participants = await Promise.all(
+        participantIds.map((participantId) =>
+          UserSnapshot.findById(participantId),
+        ),
+      );
+
+      if (participants.some((participant) => !participant)) {
+        respondNotFound(res, "Group member");
+        return;
+      }
+
+      const newChat = await Chat.create({
+        chatType: "group",
+        users: participantIds,
+        groupName: payload.groupName,
+        groupAvatar: payload.groupAvatar,
+      });
+
+      respondSuccess(
+        res,
+        "New chat created",
+        {
+          chatId: newChat._id,
+        },
+        201,
+      );
+      return;
+    }
+
+    const { otherUserId } = payload;
 
     const otherUser = await UserSnapshot.findById(otherUserId);
     if (!otherUser) {
@@ -77,7 +203,9 @@ export const createNewChat = TryCatch(
       return;
     }
 
+    // Also matches legacy documents that pre-date the chatType field
     const existingChat = await Chat.findOne({
+      $or: [{ chatType: "direct" }, { chatType: { $exists: false } }],
       users: { $all: [userId, otherUserId], $size: 2 },
     });
 
@@ -89,6 +217,7 @@ export const createNewChat = TryCatch(
     }
 
     const newChat = await Chat.create({
+      chatType: "direct",
       users: [userId, otherUserId],
     });
     respondSuccess(
@@ -111,21 +240,15 @@ export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
 
   const chats = await Chat.find({ users: userId }).sort({ updatedAt: -1 });
 
-  const chatWithUserData = await Promise.all(
+  const chatsWithParticipants = await Promise.all(
     chats.map(async (chat: (typeof chats)[number]) => {
-      const otherUserId = chat.users.find((id: string) => id !== userId);
-      const unseenCount = await Messages.countDocuments({
-        chatId: chat._id,
-        sender: { $ne: userId },
-        seen: false,
-      });
-
-      const userSnapshot = otherUserId
-        ? await UserSnapshot.findById(otherUserId)
-        : null;
+      const unseenCount = await Messages.countDocuments(
+        buildUnreadMessageQuery(chat._id, userId),
+      );
+      const participants = await getChatParticipants(chat.users);
 
       return {
-        user: userSnapshot ?? { _id: otherUserId, name: "Unknown User" },
+        participants,
         chat: {
           ...chat.toObject(),
           latestMessage: chat.latestMessage || null,
@@ -135,7 +258,7 @@ export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
     }),
   );
 
-  respondSuccess(res, "Chats fetched", { chats: chatWithUserData });
+  respondSuccess(res, "Chats fetched", { chats: chatsWithParticipants });
 });
 
 export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
@@ -162,25 +285,33 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     return;
   }
 
-  const otherUserId = chat.users.find(
+  const receiverIds = chat.users.filter(
     (id: string) => id.toString() !== senderId.toString(),
   );
-  if (!otherUserId) {
-    respondError(res, 422, "Chat must contain exactly two participants");
+  if (receiverIds.length === 0) {
+    respondError(res, 422, "Chat must contain at least two participants");
     return;
   }
 
-  const receiverSocketIds = getUserSocketIds(otherUserId.toString());
-  const isReceiverInChatRoom = receiverSocketIds.some((socketId) => {
-    const receiverSocket = io.sockets.sockets.get(socketId);
-    return Boolean(receiverSocket && receiverSocket.rooms.has(chatId));
-  });
+  const readAt = new Date();
+  const receiverIdsInRoom = receiverIds.filter((receiverId: string) =>
+    isParticipantInChatRoom(receiverId.toString(), chatId),
+  );
+  const areReceiversInChatRoom = receiverIdsInRoom.length === receiverIds.length;
+  const readBy = [
+    { userId: senderId.toString(), readAt },
+    ...receiverIdsInRoom.map((receiverId: string) => ({
+      userId: receiverId.toString(),
+      readAt,
+    })),
+  ];
 
   let messageData: any = {
     chatId,
     sender: senderId,
-    seen: isReceiverInChatRoom,
-    seenAt: isReceiverInChatRoom ? new Date() : undefined,
+    readBy,
+    seen: areReceiversInChatRoom,
+    seenAt: areReceiversInChatRoom ? readAt : undefined,
   };
 
   if (imageFile) {
@@ -210,6 +341,7 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
 
   const message = new Messages(messageData);
   const savedMessage = await message.save();
+  const clientMessage = toClientMessage(savedMessage, chat.users);
 
   await Chat.findByIdAndUpdate(
     chatId,
@@ -220,14 +352,16 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     { new: true },
   );
 
-  io.to(chatId).emit("newMessage", savedMessage);
-  io.to(otherUserId.toString()).emit("newMessage", savedMessage);
-  io.to(senderId.toString()).emit("newMessage", savedMessage);
+  io.to(chatId).emit("newMessage", clientMessage);
+  receiverIds.forEach((receiverId: string) => {
+    io.to(receiverId.toString()).emit("newMessage", clientMessage);
+  });
+  io.to(senderId.toString()).emit("newMessage", clientMessage);
 
-  if (isReceiverInChatRoom) {
+  if (areReceiversInChatRoom) {
     io.to(senderId.toString()).emit("messagesSeen", {
       chatId,
-      seenBy: otherUserId,
+      seenBy: receiverIds.length === 1 ? receiverIds[0] : receiverIds,
       messageIds: [savedMessage._id],
     });
   }
@@ -235,7 +369,7 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
   respondSuccess(
     res,
     "Message sent",
-    { message: savedMessage, sender: senderId },
+    { message: clientMessage, sender: senderId },
     201,
   );
 });
@@ -264,39 +398,44 @@ export const getMessageByChat = TryCatch(
       return;
     }
 
-    const messagesToMarkSeen = await Messages.find({
-      chatId,
-      sender: { $ne: userId },
-      seen: false,
+    const unreadMessageQuery = buildUnreadMessageQuery(chatId, userId);
+    const messagesToMarkSeen = await Messages.find(unreadMessageQuery);
+    const readAt = new Date();
+
+    await Messages.updateMany(unreadMessageQuery, {
+      $addToSet: { readBy: { userId, readAt } },
+      $set: { seenAt: readAt },
     });
 
-    await Messages.updateMany(
-      { chatId, sender: { $ne: userId }, seen: false },
-      { seen: true, seenAt: new Date() },
+    const messages = await Messages.find({ chatId }).sort({ createdAt: 1 });
+    const otherParticipantIds = chat.users.filter(
+      (id: string) => id !== userId,
     );
 
-    const messages = await Messages.find({ chatId }).sort({ createdAt: 1 });
-    const otherUserId = chat.users.find((id: string) => id !== userId);
-
     if (messagesToMarkSeen.length > 0) {
-      if (otherUserId) {
-        io.to(otherUserId?.toString() || "").emit("messagesSeen", {
+      otherParticipantIds.forEach((participantId) => {
+        io.to(participantId.toString()).emit("messagesSeen", {
           chatId,
           seenBy: userId,
           messageIds: messagesToMarkSeen.map(
             (msg: (typeof messagesToMarkSeen)[number]) => msg._id,
           ),
         });
-      }
+      });
     }
 
-    const userSnapshot = otherUserId
-      ? await UserSnapshot.findById(otherUserId)
-      : null;
+    const participants = await getChatParticipants(chat.users);
+    const clientMessages = messages.map((message) =>
+      toClientMessage(message, chat.users),
+    );
 
     respondSuccess(res, "Messages fetched", {
-      messages,
-      user: userSnapshot ?? { _id: otherUserId, name: "Unknown User" },
+      messages: clientMessages,
+      participants,
+      chat: {
+        ...chat.toObject(),
+        latestMessage: chat.latestMessage || null,
+      },
     });
   },
 );
