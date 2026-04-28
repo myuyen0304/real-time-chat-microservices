@@ -249,6 +249,60 @@ Sau khi chạy:
 
 `mail-service` không cần expose port ra ngoài để frontend dùng, nhưng compose hiện vẫn khởi động service này để consume queue.
 
+## Chạy production-like Compose
+
+`docker-compose.yml` phục vụ local development nên expose nhiều port để debug. Khi cần cấu hình gần production hơn, dùng file prod:
+
+```bash
+docker compose -f docker-compose.prod.yml up --build
+```
+
+File `docker-compose.prod.yml` chỉ publish gateway ra host. MongoDB, Redis, RabbitMQ, user-service, chat-service và frontend chỉ nằm trong Docker network nội bộ.
+
+Cần đặt các biến sau trong root `.env` hoặc secret store của môi trường deploy:
+
+```env
+NEXT_PUBLIC_GATEWAY_URL=https://your-domain.example
+RABBITMQ_DEFAULT_USER=replace_with_rabbitmq_user
+RABBITMQ_DEFAULT_PASS=replace_with_rabbitmq_password
+GATEWAY_HTTP_PORT=80
+GATEWAY_HTTPS_PORT=443
+MONGO_ROOT_USERNAME=replace_with_mongo_root_user
+MONGO_ROOT_PASSWORD=replace_with_mongo_root_password
+REDIS_PASSWORD=replace_with_redis_password
+NGINX_TLS_CERT_PATH=./secrets/nginx/tls.crt
+NGINX_TLS_KEY_PATH=./secrets/nginx/tls.key
+```
+
+Không dùng `guest/guest` cho RabbitMQ ngoài local development. Không commit file trong `secrets/`; mount TLS certificate/key từ máy chạy deploy hoặc secret store. Nếu mật khẩu MongoDB hoặc Redis có ký tự đặc biệt trong URI như `@`, `:`, `/`, `?`, `#`, `[`, `]`, `&`, hãy URL-encode trước khi đưa vào `.env`.
+
+## CI/CD
+
+GitHub Actions có 2 workflow:
+
+- `.github/workflows/ci.yml`: chạy khi push `main`, pull request, hoặc chạy thủ công. Workflow này lint/build frontend, build/test user-service, build/test chat-service, build mail-service, và validate Docker Compose local/prod.
+- `.github/workflows/deploy-prod.yml`: deploy thủ công qua `workflow_dispatch`, SSH vào server, pull `main`, validate `docker-compose.prod.yml`, rồi chạy `docker compose -f docker-compose.prod.yml up -d --build`.
+
+Để dùng deploy workflow, cấu hình GitHub Environment `production` và các secrets sau:
+
+```text
+PROD_SSH_HOST
+PROD_SSH_USER
+PROD_SSH_KEY
+PROD_SSH_PORT
+PROD_APP_DIR
+NEXT_PUBLIC_GATEWAY_URL
+RABBITMQ_DEFAULT_USER
+RABBITMQ_DEFAULT_PASS
+MONGO_ROOT_USERNAME
+MONGO_ROOT_PASSWORD
+REDIS_PASSWORD
+NGINX_TLS_CERT_PATH
+NGINX_TLS_KEY_PATH
+GATEWAY_HTTP_PORT
+GATEWAY_HTTPS_PORT
+```
+
 ## Chạy local từng service
 
 ### 1. Cài dependencies

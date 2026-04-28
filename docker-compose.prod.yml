@@ -1,0 +1,130 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    environment:
+      - RABBITMQ_DEFAULT_USER=${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER}
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS}
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: mongo:8
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME}
+      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --username \"$$MONGO_INITDB_ROOT_USERNAME\" --password \"$$MONGO_INITDB_ROOT_PASSWORD\" --authenticationDatabase admin --eval \"db.adminCommand('ping').ok\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    command:
+      [
+        "redis-server",
+        "--appendonly",
+        "yes",
+        "--requirepass",
+        "${REDIS_PASSWORD:?Set REDIS_PASSWORD}",
+      ]
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:?Set REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping | grep PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  user-service:
+    build: ./backend/user
+    env_file: ./backend/user/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER}
+      - Rabbitmq_Password=${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS}
+      - MONGO_DB_NAME=chat_user_service
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}@mongo:27017/chat_app?authSource=admin
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  mail-service:
+    build: ./backend/mail
+    env_file: ./backend/mail/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER}
+      - Rabbitmq_Password=${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  chat-service:
+    build: ./backend/chat
+    env_file: ./backend/chat/.env
+    environment:
+      - Rabbitmq_Host=rabbitmq
+      - Rabbitmq_Username=${RABBITMQ_DEFAULT_USER:?Set RABBITMQ_DEFAULT_USER}
+      - Rabbitmq_Password=${RABBITMQ_DEFAULT_PASS:?Set RABBITMQ_DEFAULT_PASS}
+      - MONGO_DB_NAME=chat_chat_service
+      - MONGO_URI=mongodb://${MONGO_ROOT_USERNAME:?Set MONGO_ROOT_USERNAME}:${MONGO_ROOT_PASSWORD:?Set MONGO_ROOT_PASSWORD}@mongo:27017/chat_app?authSource=admin
+      - REDIS_URL=redis://:${REDIS_PASSWORD:?Set REDIS_PASSWORD}@redis:6379
+      - USER_SERVICE=http://user-service:5000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5002/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "${GATEWAY_HTTP_PORT:-80}:80"
+      - "${GATEWAY_HTTPS_PORT:-443}:443"
+    volumes:
+      - ./nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - ${NGINX_TLS_CERT_PATH:?Set NGINX_TLS_CERT_PATH}:/etc/nginx/certs/tls.crt:ro
+      - ${NGINX_TLS_KEY_PATH:?Set NGINX_TLS_KEY_PATH}:/etc/nginx/certs/tls.key:ro
+    depends_on:
+      - frontend
+      - user-service
+      - chat-service
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - NEXT_PUBLIC_GATEWAY_URL=${NEXT_PUBLIC_GATEWAY_URL:?Set NEXT_PUBLIC_GATEWAY_URL}
+
+volumes:
+  mongo_data:
+  redis_data:
