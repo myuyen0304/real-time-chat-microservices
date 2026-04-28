@@ -1,37 +1,58 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const rabbitMqState = vi.hoisted(() => {
+  type TestMessage = {
+    content: Buffer;
+    properties: {
+      contentType?: string;
+      headers?: Record<string, unknown>;
+    };
+  };
+
   const consumeHandlers: Array<
-    (message: { content: Buffer } | null) => Promise<void> | void
+    (message: TestMessage | null) => Promise<void> | void
   > = [];
   const channel = {
+    on: vi.fn(),
+    close: vi.fn(async () => undefined),
     assertQueue: vi.fn(async () => undefined),
     consume: vi.fn(
       async (
         _queue: string,
-        handler: (message: { content: Buffer } | null) => Promise<void> | void,
+        handler: (message: TestMessage | null) => Promise<void> | void,
       ) => {
         consumeHandlers.push(handler);
       },
     ),
+    sendToQueue: vi.fn(),
     ack: vi.fn(),
     nack: vi.fn(),
   };
 
-  const connect = vi.fn(async () => ({
+  const connection = {
+    on: vi.fn(),
+    close: vi.fn(async () => undefined),
     createChannel: vi.fn(async () => channel),
-  }));
+  };
+
+  const connect = vi.fn(async () => connection);
 
   const reset = () => {
     consumeHandlers.length = 0;
+    connection.on.mockClear();
+    connection.close.mockClear();
+    connection.createChannel.mockClear();
+    channel.on.mockClear();
+    channel.close.mockClear();
     channel.assertQueue.mockClear();
     channel.consume.mockClear();
+    channel.sendToQueue.mockClear();
     channel.ack.mockClear();
     channel.nack.mockClear();
     connect.mockClear();
   };
 
-  return { channel, connect, consumeHandlers, reset };
+  return { channel, connect, connection, consumeHandlers, reset };
 });
 
 const snapshots = vi.hoisted(() => ({
@@ -79,12 +100,85 @@ describe("chat user event consumer", () => {
           },
         }),
       ),
+      properties: {},
     });
 
     expect(snapshots.findByIdAndUpdate).toHaveBeenCalledWith(
       "507f1f77bcf86cd799439012",
       { name: "Bob", email: "bob@example.com" },
       { upsert: true, new: true },
+    );
+    expect(rabbitMqState.channel.ack).toHaveBeenCalledTimes(1);
+    expect(rabbitMqState.channel.sendToQueue).not.toHaveBeenCalled();
+    expect(rabbitMqState.channel.nack).not.toHaveBeenCalled();
+  });
+
+  it("schedules a delayed retry when processing a user event fails", async () => {
+    snapshots.findByIdAndUpdate.mockRejectedValueOnce(new Error("db down"));
+    await startUserEventsConsumer();
+
+    const handler = rabbitMqState.consumeHandlers[0];
+    const content = Buffer.from(
+      JSON.stringify({
+        type: "user.upserted",
+        payload: {
+          _id: "507f1f77bcf86cd799439012",
+          name: "Bob",
+          email: "bob@example.com",
+        },
+      }),
+    );
+
+    await handler?.({
+      content,
+      properties: { contentType: "application/json", headers: {} },
+    });
+
+    expect(rabbitMqState.channel.sendToQueue).toHaveBeenCalledWith(
+      "user.events.retry",
+      content,
+      {
+        contentType: "application/json",
+        headers: { "x-retry-count": 1 },
+        persistent: true,
+      },
+    );
+    expect(rabbitMqState.channel.ack).toHaveBeenCalledTimes(1);
+    expect(rabbitMqState.channel.nack).not.toHaveBeenCalled();
+  });
+
+  it("moves a repeatedly failing user event to the DLQ", async () => {
+    snapshots.findByIdAndUpdate.mockRejectedValueOnce(new Error("db down"));
+    await startUserEventsConsumer();
+
+    const handler = rabbitMqState.consumeHandlers[0];
+    const content = Buffer.from(
+      JSON.stringify({
+        type: "user.upserted",
+        payload: {
+          _id: "507f1f77bcf86cd799439012",
+          name: "Bob",
+          email: "bob@example.com",
+        },
+      }),
+    );
+
+    await handler?.({
+      content,
+      properties: {
+        contentType: "application/json",
+        headers: { "x-retry-count": 2 },
+      },
+    });
+
+    expect(rabbitMqState.channel.sendToQueue).toHaveBeenCalledWith(
+      "user.events.dlq",
+      content,
+      {
+        contentType: "application/json",
+        headers: { "x-retry-count": 3 },
+        persistent: true,
+      },
     );
     expect(rabbitMqState.channel.ack).toHaveBeenCalledTimes(1);
     expect(rabbitMqState.channel.nack).not.toHaveBeenCalled();
