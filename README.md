@@ -276,6 +276,34 @@ NGINX_TLS_KEY_PATH=./secrets/nginx/tls.key
 
 Không dùng `guest/guest` cho RabbitMQ ngoài local development. Không commit file trong `secrets/`; mount TLS certificate/key từ máy chạy deploy hoặc secret store. Nếu mật khẩu MongoDB hoặc Redis có ký tự đặc biệt trong URI như `@`, `:`, `/`, `?`, `#`, `[`, `]`, `&`, hãy URL-encode trước khi đưa vào `.env`.
 
+## Docker image cleanup
+
+Docker Desktop có thể hiển thị nhiều image `Unused` không thuộc project này, ví dụ `registry.k8s.io/*` hoặc `docker/desktop-kubernetes`. Đây là image nội bộ của Docker Desktop Kubernetes. Nếu bạn không dùng Kubernetes trong Docker Desktop, tắt Kubernetes trong Settings rồi prune image sẽ dọn được nhóm này.
+
+Project này build image từ bốn context: `frontend`, `backend/user`, `backend/chat`, và `backend/mail`. Các Dockerfile dùng multi-stage build, `.dockerignore` loại bỏ `node_modules`, output build, test files, env files, và runtime image chỉ cài production dependencies.
+
+Dọn container/image/cache của compose project hiện tại:
+
+```bash
+docker compose down --remove-orphans
+docker image prune
+docker builder prune
+```
+
+Dọn cả volume database/Redis local của project, chỉ dùng khi bạn chấp nhận mất dữ liệu local:
+
+```bash
+docker compose down --volumes --remove-orphans
+```
+
+Dọn toàn bộ image/cache không dùng trên Docker Desktop:
+
+```bash
+docker system prune
+```
+
+Không chạy `docker system prune --volumes` nếu bạn còn cần dữ liệu MongoDB/Redis local.
+
 ## CI/CD
 
 GitHub Actions có 2 workflow:

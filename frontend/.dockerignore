@@ -2,3 +2,11 @@ node_modules
 .next
 .env
 .env.local
+.env.*
+!.env.example
+npm-debug.log*
+coverage
+*.tsbuildinfo
+Dockerfile
+.dockerignore
+README.md
