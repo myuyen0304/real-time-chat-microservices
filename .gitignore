@@ -54,6 +54,7 @@ backend/*/tests/**/*.js
 backend/*/tests/**/*.d.ts
 backend/*/tests/**/*.js.map
 backend/*/tests/**/*.d.ts.map
+AGENTS.md
 CLAUDE.md
 CHECKLIST_7_DAYS.md
 FIX_TRACKER.md
