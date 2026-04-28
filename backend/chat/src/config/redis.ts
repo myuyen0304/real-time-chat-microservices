@@ -1,7 +1,7 @@
 import { createClient } from "redis";
-import { userEnv } from "./env.js";
+import { chatEnv } from "./env.js";
 
-const isTlsRedisUrl = userEnv.REDIS_URL.startsWith("rediss://");
+const isTlsRedisUrl = chatEnv.REDIS_URL.startsWith("rediss://");
 const REDIS_CONNECT_TIMEOUT_MS = 5_000;
 const REDIS_MAX_RECONNECT_RETRIES = 10;
 const REDIS_BASE_RECONNECT_DELAY_MS = 100;
@@ -33,7 +33,7 @@ const formatRedisError = (error: Error) => {
   }`;
 };
 
-const createRedisErrorLogger = () => {
+const createRedisErrorLogger = (clientName: string) => {
   let lastTransientLogAt = 0;
   let suppressedTransientErrors = 0;
 
@@ -56,14 +56,14 @@ const createRedisErrorLogger = () => {
 
     if (isTransient) {
       console.warn(
-        `[user-service] Redis transient connection error${suppressedSuffix}: ${formatRedisError(
+        `[chat-service] Redis ${clientName} transient connection error${suppressedSuffix}: ${formatRedisError(
           error,
         )}`,
       );
       lastTransientLogAt = now;
     } else {
       console.error(
-        `[user-service] Redis client error${suppressedSuffix}`,
+        `[chat-service] Redis ${clientName} client error${suppressedSuffix}`,
         error,
       );
     }
@@ -72,7 +72,7 @@ const createRedisErrorLogger = () => {
   };
 };
 
-const createRedisReconnectLogger = () => {
+const createRedisReconnectLogger = (clientName: string) => {
   let lastReconnectLogAt = 0;
   let suppressedReconnectLogs = 0;
 
@@ -89,7 +89,9 @@ const createRedisReconnectLogger = () => {
         ? `; suppressed ${suppressedReconnectLogs} reconnect notices`
         : "";
 
-    console.warn(`[user-service] Redis client reconnecting${suppressedSuffix}`);
+    console.warn(
+      `[chat-service] Redis ${clientName} client reconnecting${suppressedSuffix}`,
+    );
     suppressedReconnectLogs = 0;
     lastReconnectLogAt = now;
   };
@@ -98,7 +100,7 @@ const createRedisReconnectLogger = () => {
 const reconnectStrategy = (retries: number, cause: Error) => {
   if (retries >= REDIS_MAX_RECONNECT_RETRIES) {
     return new Error(
-      `[user-service] Redis reconnect attempts exhausted after ${retries} retries: ${cause.message}`,
+      `[chat-service] Redis reconnect attempts exhausted after ${retries} retries: ${cause.message}`,
     );
   }
 
@@ -108,8 +110,8 @@ const reconnectStrategy = (retries: number, cause: Error) => {
   return Math.min(exponentialDelay + jitter, REDIS_MAX_RECONNECT_DELAY_MS);
 };
 
-export const redisClient = createClient({
-  url: userEnv.REDIS_URL,
+export const socketRedisPubClient = createClient({
+  url: chatEnv.REDIS_URL,
   socket: isTlsRedisUrl
     ? {
         tls: true,
@@ -120,31 +122,42 @@ export const redisClient = createClient({
     : { connectTimeout: REDIS_CONNECT_TIMEOUT_MS, reconnectStrategy },
 });
 
-redisClient.on("error", createRedisErrorLogger());
-redisClient.on("reconnecting", createRedisReconnectLogger());
+export const socketRedisSubClient = socketRedisPubClient.duplicate();
 
-redisClient.on("ready", () => {
-  console.log("[user-service] Redis client ready");
-});
+socketRedisPubClient.on("error", createRedisErrorLogger("pub"));
+socketRedisPubClient.on("reconnecting", createRedisReconnectLogger("pub"));
+socketRedisSubClient.on("error", createRedisErrorLogger("sub"));
+socketRedisSubClient.on("reconnecting", createRedisReconnectLogger("sub"));
 
-redisClient.on("end", () => {
-  console.warn("[user-service] Redis connection closed");
-});
-
-export const connectRedis = async () => {
-  if (!redisClient.isOpen) {
-    await redisClient.connect();
-  }
+export const connectSocketRedisClients = async () => {
+  await Promise.all([
+    socketRedisPubClient.connect(),
+    socketRedisSubClient.connect(),
+  ]);
 };
 
-export const getRedisHealth = () => ({
-  status: redisClient.isReady ? "up" : "down",
-  isOpen: redisClient.isOpen,
-  isReady: redisClient.isReady,
+export const getSocketRedisHealth = () => ({
+  status:
+    socketRedisPubClient.isReady && socketRedisSubClient.isReady
+      ? "up"
+      : "down",
+  pub: {
+    isOpen: socketRedisPubClient.isOpen,
+    isReady: socketRedisPubClient.isReady,
+  },
+  sub: {
+    isOpen: socketRedisSubClient.isOpen,
+    isReady: socketRedisSubClient.isReady,
+  },
 });
 
-export const disconnectRedis = async () => {
-  if (redisClient.isOpen) {
-    await redisClient.close();
-  }
+export const disconnectSocketRedisClients = async () => {
+  await Promise.all([
+    socketRedisPubClient.isOpen
+      ? socketRedisPubClient.close()
+      : Promise.resolve(),
+    socketRedisSubClient.isOpen
+      ? socketRedisSubClient.close()
+      : Promise.resolve(),
+  ]);
 };
