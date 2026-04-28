@@ -1,11 +1,15 @@
 import { Server, Socket } from "socket.io";
 import { createAdapter } from "@socket.io/redis-adapter";
-import { createClient } from "redis";
 import http from "http";
 import express from "express";
 import jwt from "jsonwebtoken";
 import type { JwtPayload } from "jsonwebtoken";
 import { chatEnv } from "./env.js";
+import {
+  connectSocketRedisClients,
+  socketRedisPubClient,
+  socketRedisSubClient,
+} from "./redis.js";
 import { Call } from "../model/Call.js";
 import {
   finalizeCall,
@@ -19,7 +23,15 @@ const { JsonWebTokenError, TokenExpiredError } = jwt;
 
 const app = express();
 const server = http.createServer(app);
-const userSocketMap = new Map<string, Set<string>>();
+const PRESENCE_SOCKET_TTL_SECONDS = 120;
+const PRESENCE_HEARTBEAT_MS = 30_000;
+const ONLINE_USERS_KEY = "chat:presence:online-users";
+
+const getUserSocketsKey = (userId: string) =>
+  `chat:presence:user:${userId}:sockets`;
+
+const getSocketUserKey = (socketId: string) =>
+  `chat:presence:socket:${socketId}:user`;
 
 // Caches the two participant IDs for each active call so that subsequent
 // WebRTC signals (offer, answer, ICE candidates) skip the DB round-trip.
@@ -45,29 +57,84 @@ const io = new Server(server, {
   },
 });
 
-const pubClient = createClient({ url: chatEnv.REDIS_URL });
-const subClient = pubClient.duplicate();
+const registerPresence = async (userId: string, socketId: string) => {
+  await Promise.all([
+    socketRedisPubClient.sAdd(ONLINE_USERS_KEY, userId),
+    socketRedisPubClient.sAdd(getUserSocketsKey(userId), socketId),
+    socketRedisPubClient.set(getSocketUserKey(socketId), userId, {
+      EX: PRESENCE_SOCKET_TTL_SECONDS,
+    }),
+  ]);
+};
 
-pubClient.on("error", (error) => {
-  console.error("[chat-service] Redis pub client error", error);
-});
+const refreshPresence = async (socketId: string) => {
+  await socketRedisPubClient.expire(
+    getSocketUserKey(socketId),
+    PRESENCE_SOCKET_TTL_SECONDS,
+  );
+};
 
-pubClient.on("reconnecting", () => {
-  console.warn("[chat-service] Redis pub client reconnecting");
-});
+const removePresence = async (userId: string, socketId: string) => {
+  await Promise.all([
+    socketRedisPubClient.del(getSocketUserKey(socketId)),
+    socketRedisPubClient.sRem(getUserSocketsKey(userId), socketId),
+  ]);
 
-subClient.on("error", (error) => {
-  console.error("[chat-service] Redis sub client error", error);
-});
+  const remainingSocketCount = await socketRedisPubClient.sCard(
+    getUserSocketsKey(userId),
+  );
 
-subClient.on("reconnecting", () => {
-  console.warn("[chat-service] Redis sub client reconnecting");
-});
+  if (remainingSocketCount === 0) {
+    await socketRedisPubClient.sRem(ONLINE_USERS_KEY, userId);
+  }
+};
 
-const getOnlineUsers = (): string[] => Array.from(userSocketMap.keys());
+const pruneStaleUserSockets = async (userId: string): Promise<string[]> => {
+  const userSocketsKey = getUserSocketsKey(userId);
+  const socketIds = await socketRedisPubClient.sMembers(userSocketsKey);
 
-const broadcastOnlineUsers = () => {
-  io.emit("getOnlineUser", getOnlineUsers());
+  if (socketIds.length === 0) {
+    await socketRedisPubClient.sRem(ONLINE_USERS_KEY, userId);
+    return [];
+  }
+
+  const socketUserIds = await Promise.all(
+    socketIds.map((socketId) =>
+      socketRedisPubClient.get(getSocketUserKey(socketId)),
+    ),
+  );
+  const activeSocketIds = socketIds.filter(
+    (socketId, index) => socketUserIds[index] === userId,
+  );
+  const staleSocketIds = socketIds.filter(
+    (socketId) => !activeSocketIds.includes(socketId),
+  );
+
+  if (staleSocketIds.length > 0) {
+    await socketRedisPubClient.sRem(userSocketsKey, staleSocketIds);
+  }
+
+  if (activeSocketIds.length === 0) {
+    await socketRedisPubClient.sRem(ONLINE_USERS_KEY, userId);
+  }
+
+  return activeSocketIds;
+};
+
+const getOnlineUsers = async (): Promise<string[]> => {
+  const userIds = await socketRedisPubClient.sMembers(ONLINE_USERS_KEY);
+  const activeUserIds = await Promise.all(
+    userIds.map(async (userId) => {
+      const socketIds = await pruneStaleUserSockets(userId);
+      return socketIds.length > 0 ? userId : null;
+    }),
+  );
+
+  return activeUserIds.filter((userId): userId is string => Boolean(userId));
+};
+
+const broadcastOnlineUsers = async () => {
+  io.emit("getOnlineUser", await getOnlineUsers());
 };
 
 const emitCallSummaryMessage = (
@@ -183,9 +250,9 @@ const handleDisconnectedCalls = async (userId: string) => {
   }
 };
 
-Promise.all([pubClient.connect(), subClient.connect()])
+connectSocketRedisClients()
   .then(() => {
-    io.adapter(createAdapter(pubClient, subClient));
+    io.adapter(createAdapter(socketRedisPubClient, socketRedisSubClient));
     console.log("Socket.IO Redis adapter connected");
   })
   .catch((error) => {
@@ -259,12 +326,12 @@ io.use((socket: AuthenticatedSocket, next) => {
 export const getReceiverSocketId = async (
   receiverId: string,
 ): Promise<string | undefined> => {
-  const socketIds = userSocketMap.get(receiverId);
-  return socketIds?.values().next().value;
+  const socketIds = await getUserSocketIds(receiverId);
+  return socketIds[0];
 };
 
-export const getUserSocketIds = (userId: string): string[] => {
-  return Array.from(userSocketMap.get(userId) ?? []);
+export const getUserSocketIds = async (userId: string): Promise<string[]> => {
+  return pruneStaleUserSockets(userId);
 };
 
 export const evictCallSignalCache = (callId: string): void => {
@@ -275,22 +342,38 @@ io.on("connection", async (socket: AuthenticatedSocket) => {
   console.log("User Connected", socket.id);
 
   const userId = socket.data.user?._id;
+  let presenceHeartbeat: NodeJS.Timeout | undefined;
 
   if (userId) {
-    const existingSockets = userSocketMap.get(userId) ?? new Set<string>();
-    existingSockets.add(socket.id);
-    userSocketMap.set(userId, existingSockets);
+    try {
+      await registerPresence(userId, socket.id);
+      presenceHeartbeat = setInterval(() => {
+        refreshPresence(socket.id).catch((error) => {
+          console.error(
+            `[socket] Failed to refresh presence for socket ${socket.id}`,
+            error,
+          );
+        });
+      }, PRESENCE_HEARTBEAT_MS);
+    } catch (error) {
+      console.error(
+        `[socket] Failed to register presence for user ${userId}`,
+        error,
+      );
+      socket.disconnect(true);
+      return;
+    }
     console.log(`User ${userId} mapped to socket ${socket.id}`);
   }
 
-  broadcastOnlineUsers();
+  await broadcastOnlineUsers();
 
   if (userId) {
     socket.join(userId);
   }
 
   socket.on("syncOnlineUsers", async () => {
-    socket.emit("getOnlineUser", getOnlineUsers());
+    socket.emit("getOnlineUser", await getOnlineUsers());
   });
 
   socket.on("typing", (data) => {
@@ -395,22 +478,24 @@ io.on("connection", async (socket: AuthenticatedSocket) => {
 
   socket.on("disconnect", async () => {
     console.log("User Disconnected", socket.id);
+    if (presenceHeartbeat) {
+      clearInterval(presenceHeartbeat);
+    }
+
     if (userId) {
-      const existingSockets = userSocketMap.get(userId);
       let shouldFinalizeCalls = false;
 
-      if (existingSockets) {
-        existingSockets.delete(socket.id);
-
-        if (existingSockets.size === 0) {
-          userSocketMap.delete(userId);
-          shouldFinalizeCalls = true;
-        } else {
-          userSocketMap.set(userId, existingSockets);
-        }
+      try {
+        await removePresence(userId, socket.id);
+        shouldFinalizeCalls = (await getUserSocketIds(userId)).length === 0;
+      } catch (error) {
+        console.error(
+          `[socket] Failed to remove presence for user ${userId}`,
+          error,
+        );
       }
 
-      broadcastOnlineUsers();
+      await broadcastOnlineUsers();
 
       if (shouldFinalizeCalls) {
         try {

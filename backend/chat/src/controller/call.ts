@@ -222,7 +222,7 @@ export const initiateVideoCall = TryCatch(
       return;
     }
 
-    const recipientSocketIds = getUserSocketIds(recipientId.toString());
+    const recipientSocketIds = await getUserSocketIds(recipientId.toString());
     if (recipientSocketIds.length === 0) {
       respondError(res, 409, "Recipient is offline");
       return;

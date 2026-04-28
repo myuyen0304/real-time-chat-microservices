@@ -387,6 +387,22 @@ const testState = vi.hoisted(() => {
         events.push({ target, event, payload });
       }),
     })),
+    in: vi.fn((roomId: string) => ({
+      fetchSockets: vi.fn(async () =>
+        Array.from(socketRoomMembership.entries())
+          .filter(([, rooms]) => rooms.has(roomId))
+          .map(([socketId]) => ({
+            data: {
+              user: {
+                _id:
+                  Array.from(roomMembers.entries()).find(([, sockets]) =>
+                    sockets.has(socketId),
+                  )?.[0] ?? "",
+              },
+            },
+          })),
+      ),
+    })),
     sockets: {
       sockets: new Map<string, { rooms: Set<string> }>(),
     },
@@ -434,6 +450,7 @@ const testState = vi.hoisted(() => {
     UserSnapshot.find.mockClear();
     UserSnapshot.findByIdAndUpdate.mockClear();
     io.to.mockClear();
+    io.in.mockClear();
     getUserSocketIds.mockClear();
   };
 

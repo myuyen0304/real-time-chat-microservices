@@ -4,7 +4,7 @@ import type { AuthenticatedRequest } from "../middleware/isAuth.js";
 import { Chat } from "../model/Chat.js";
 import { Messages } from "../model/Message.js";
 import { UserSnapshot } from "../model/UserSnapshot.js";
-import { getUserSocketIds, io } from "../config/socket.js";
+import { io } from "../config/socket.js";
 
 type UploadedMessageFile = {
   path?: string;
@@ -109,12 +109,14 @@ const getChatParticipants = async (
   return participantIds.map((id) => byId.get(id) ?? buildUnknownParticipant(id));
 };
 
-const isParticipantInChatRoom = (participantId: string, chatId: string) => {
-  const socketIds = getUserSocketIds(participantId);
-  return socketIds.some((socketId) => {
-    const participantSocket = io.sockets.sockets.get(socketId);
-    return Boolean(participantSocket && participantSocket.rooms.has(chatId));
-  });
+const isParticipantInChatRoom = async (
+  participantId: string,
+  chatId: string,
+) => {
+  const roomSockets = await io.in(chatId).fetchSockets();
+  return roomSockets.some(
+    (socket) => socket.data.user?._id?.toString() === participantId,
+  );
 };
 
 const hasReadReceipt = (message: MessageLike, userId: string) => {
@@ -294,9 +296,15 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
   }
 
   const readAt = new Date();
-  const receiverIdsInRoom = receiverIds.filter((receiverId: string) =>
-    isParticipantInChatRoom(receiverId.toString(), chatId),
+  const receiverRoomStates = await Promise.all(
+    receiverIds.map(async (receiverId: string) => ({
+      receiverId,
+      isInRoom: await isParticipantInChatRoom(receiverId.toString(), chatId),
+    })),
   );
+  const receiverIdsInRoom = receiverRoomStates
+    .filter(({ isInRoom }) => isInRoom)
+    .map(({ receiverId }) => receiverId);
   const areReceiversInChatRoom = receiverIdsInRoom.length === receiverIds.length;
   const readBy = [
     { userId: senderId.toString(), readAt },
