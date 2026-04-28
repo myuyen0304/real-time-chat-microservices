@@ -25,6 +25,7 @@ const app = express();
 const server = http.createServer(app);
 const PRESENCE_SOCKET_TTL_SECONDS = 120;
 const PRESENCE_HEARTBEAT_MS = 30_000;
+const CALL_PARTICIPANT_CACHE_TTL_SECONDS = 86_400;
 const ONLINE_USERS_KEY = "chat:presence:online-users";
 
 const getUserSocketsKey = (userId: string) =>
@@ -33,10 +34,8 @@ const getUserSocketsKey = (userId: string) =>
 const getSocketUserKey = (socketId: string) =>
   `chat:presence:socket:${socketId}:user`;
 
-// Caches the two participant IDs for each active call so that subsequent
-// WebRTC signals (offer, answer, ICE candidates) skip the DB round-trip.
-// Populated on the first signal for a given callId; cleared on call end.
-const callParticipantCache = new Map<string, string[]>();
+const getCallParticipantsKey = (callId: string) =>
+  `chat:call:${callId}:participants`;
 
 interface SocketUser {
   _id: string;
@@ -137,6 +136,46 @@ const broadcastOnlineUsers = async () => {
   io.emit("getOnlineUser", await getOnlineUsers());
 };
 
+const getCachedCallParticipants = async (
+  callId: string,
+): Promise<string[] | null> => {
+  const cachedParticipantIds = await socketRedisPubClient.get(
+    getCallParticipantsKey(callId),
+  );
+
+  if (!cachedParticipantIds) {
+    return null;
+  }
+
+  try {
+    const parsedParticipantIds = JSON.parse(cachedParticipantIds);
+    return Array.isArray(parsedParticipantIds) &&
+      parsedParticipantIds.every(
+        (participantId) => typeof participantId === "string",
+      )
+      ? parsedParticipantIds
+      : null;
+  } catch {
+    await socketRedisPubClient.del(getCallParticipantsKey(callId));
+    return null;
+  }
+};
+
+const cacheCallParticipants = async (
+  callId: string,
+  participantIds: string[],
+) => {
+  await socketRedisPubClient.set(
+    getCallParticipantsKey(callId),
+    JSON.stringify(participantIds),
+    { EX: CALL_PARTICIPANT_CACHE_TTL_SECONDS },
+  );
+};
+
+const evictCachedCallParticipants = async (callId: string) => {
+  await socketRedisPubClient.del(getCallParticipantsKey(callId));
+};
+
 const emitCallSummaryMessage = (
   chatId: string,
   participantIds: string[],
@@ -166,16 +205,17 @@ const relayCallSignal = async ({
     | "call:signal:ice-candidate";
   payload: Record<string, unknown>;
 }) => {
-  let participantIds = callParticipantCache.get(callId);
+  let participantIds = await getCachedCallParticipants(callId);
 
   if (!participantIds) {
-    // First signal for this call — hit the DB once to validate and populate cache.
+    // First signal for this call across the cluster hits the DB once, then
+    // stores the participant IDs in Redis for later offer/answer/ICE events.
     const call = await Call.findById(callId);
     if (!call || !isActiveCallStatus(call.status)) {
       return;
     }
     participantIds = getCallParticipantIds(call);
-    callParticipantCache.set(callId, participantIds);
+    await cacheCallParticipants(callId, participantIds);
   }
 
   if (!participantIds.includes(socketUserId)) {
@@ -229,7 +269,7 @@ const handleDisconnectedCalls = async (userId: string) => {
       }
 
       clearCallRingTimeout(finalizedCall._id.toString());
-      callParticipantCache.delete(finalizedCall._id.toString());
+      await evictCachedCallParticipants(finalizedCall._id.toString());
 
       const participantIds = getCallParticipantIds(finalizedCall);
       participantIds.forEach((participantId) => {
@@ -334,8 +374,8 @@ export const getUserSocketIds = async (userId: string): Promise<string[]> => {
   return pruneStaleUserSockets(userId);
 };
 
-export const evictCallSignalCache = (callId: string): void => {
-  callParticipantCache.delete(callId);
+export const evictCallSignalCache = async (callId: string): Promise<void> => {
+  await evictCachedCallParticipants(callId);
 };
 
 io.on("connection", async (socket: AuthenticatedSocket) => {

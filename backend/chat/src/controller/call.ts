@@ -137,7 +137,7 @@ const scheduleMissedCallTimeout = (callId: string) => {
       return;
     }
 
-    evictCallSignalCache(callId);
+    await evictCallSignalCache(callId);
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:ended", {
       call: serializeCall(result.call),
@@ -386,7 +386,7 @@ export const declineVideoCall = TryCatch(
     }
 
     clearCallRingTimeout(callId);
-    evictCallSignalCache(callId);
+    await evictCallSignalCache(callId);
 
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:declined", {
@@ -456,7 +456,7 @@ export const endVideoCall = TryCatch(
     }
 
     clearCallRingTimeout(callId);
-    evictCallSignalCache(callId);
+    await evictCallSignalCache(callId);
 
     const participantIds = getCallParticipantIds(result.call);
     emitCallEvent(participantIds, "call:ended", {
