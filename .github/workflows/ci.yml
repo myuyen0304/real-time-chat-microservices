@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+  user-service:
+    name: User service build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/user
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/user/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  chat-service:
+    name: Chat service build and test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/chat
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/chat/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+  mail-service:
+    name: Mail service build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend/mail
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/mail/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+  compose:
+    name: Docker Compose config
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate local compose
+        run: docker compose config --quiet
+
+      - name: Validate production compose
+        env:
+          NEXT_PUBLIC_GATEWAY_URL: https://example.com
+          RABBITMQ_DEFAULT_USER: ci_rabbit
+          RABBITMQ_DEFAULT_PASS: ci_rabbit_password
+          MONGO_ROOT_USERNAME: ci_mongo
+          MONGO_ROOT_PASSWORD: ci_mongo_password
+          REDIS_PASSWORD: ci_redis_password
+          NGINX_TLS_CERT_PATH: ./secrets/nginx/tls.crt
+          NGINX_TLS_KEY_PATH: ./secrets/nginx/tls.key
+        run: docker compose -f docker-compose.prod.yml config --quiet
