@@ -1,12 +1,15 @@
 import { generateToken } from "../config/generateToken.js";
 import { publishToQueue } from "../config/rabbitmq.js";
+import { redisClient } from "../config/redis.js";
 import TryCatch from "../config/tryCatch.js";
-import { redisClient } from "../index.js";
 import type { AuthenticatedRequest } from "../middlewares/isAuth.js";
 import { User } from "../model/User.js";
 import {
+  clearOtpVerifyAttempts,
   getOtpKey,
+  hasExceededOtpVerifyAttempts,
   hasOtpRateLimit,
+  recordFailedOtpVerifyAttempt,
   setOtpRateLimit,
 } from "../utils/otpRateLimit.js";
 
@@ -92,15 +95,26 @@ export const loginUser = TryCatch(async (req, res) => {
 
 export const verifyUser = TryCatch(async (req, res) => {
   const { email, otp: enteredOtp } = req.body;
-  const otpKey = `otp:${email}`;
+  if (await hasExceededOtpVerifyAttempts(redisClient, email)) {
+    respondError(
+      res,
+      429,
+      "Too many verification attempts. Please request a new OTP",
+    );
+    return;
+  }
+
+  const otpKey = getOtpKey(email);
   const storeOtp = await redisClient.get(otpKey);
 
   if (!storeOtp || storeOtp !== enteredOtp) {
+    await recordFailedOtpVerifyAttempt(redisClient, email);
     respondError(res, 400, "Invalid or expired OTP");
     return;
   }
 
   await redisClient.del(otpKey);
+  await clearOtpVerifyAttempts(redisClient, email);
   let user = await User.findOne({ email });
 
   if (!user) {

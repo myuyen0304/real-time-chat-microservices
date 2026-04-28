@@ -135,7 +135,7 @@ const testState = vi.hoisted(() => {
   };
 });
 
-vi.mock("../src/index.js", () => ({
+vi.mock("../src/config/redis.js", () => ({
   redisClient: testState.redisClient,
 }));
 
@@ -226,6 +226,7 @@ describe("user service auth routes", () => {
 
   it("verifies OTP, creates a user, and publishes the user event", async () => {
     testState.redisStore.set("otp:alice@example.com", "123456");
+    testState.redisStore.set("otp:verify:attempts:alice@example.com", "2");
 
     const response = await request(app)
       .post("/api/v1/verify")
@@ -249,6 +250,9 @@ describe("user service auth routes", () => {
       },
     });
     expect(testState.redisStore.has("otp:alice@example.com")).toBe(false);
+    expect(
+      testState.redisStore.has("otp:verify:attempts:alice@example.com"),
+    ).toBe(false);
 
     const decoded = jwt.verify(response.body.token, testAuth.publicKey, {
       algorithms: ["RS256"],
@@ -275,6 +279,9 @@ describe("user service auth routes", () => {
       success: false,
       message: "Invalid or expired OTP",
     });
+    expect(testState.redisStore.get("otp:verify:attempts:bob@example.com")).toBe(
+      "1",
+    );
     expect(testState.publishToQueue).not.toHaveBeenCalled();
   });
 
@@ -288,6 +295,26 @@ describe("user service auth routes", () => {
       success: false,
       message: "Invalid or expired OTP",
     });
+    expect(
+      testState.redisStore.get("otp:verify:attempts:expired@example.com"),
+    ).toBe("1");
+    expect(testState.publishToQueue).not.toHaveBeenCalled();
+  });
+
+  it("rate limits verify requests after too many failed attempts", async () => {
+    testState.redisStore.set("otp:blocked@example.com", "123456");
+    testState.redisStore.set("otp:verify:attempts:blocked@example.com", "5");
+
+    const response = await request(app)
+      .post("/api/v1/verify")
+      .send({ email: "blocked@example.com", otp: "123456" });
+
+    expect(response.status).toBe(429);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Too many verification attempts. Please request a new OTP",
+    });
+    expect(testState.redisStore.get("otp:blocked@example.com")).toBe("123456");
     expect(testState.publishToQueue).not.toHaveBeenCalled();
   });
 
