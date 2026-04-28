@@ -28,6 +28,8 @@ export interface IMessage extends Document {
   }[];
   seen: boolean;
   seenAt: Date | null;
+  editedAt?: Date | null;
+  deletedAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -90,6 +92,14 @@ const schema = new Schema<IMessage>(
       default: false,
     },
     seenAt: {
+      type: Date,
+      default: null,
+    },
+    editedAt: {
+      type: Date,
+      default: null,
+    },
+    deletedAt: {
       type: Date,
       default: null,
     },

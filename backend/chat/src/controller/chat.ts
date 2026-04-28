@@ -34,6 +34,15 @@ type GroupCreateChatBody = {
 
 type CreateChatBody = DirectCreateChatBody | GroupCreateChatBody;
 
+type UpdateGroupMetadataBody = {
+  groupName?: string;
+  groupAvatar?: string;
+};
+
+type UpdateMessageBody = {
+  text: string;
+};
+
 const respondSuccess = (
   res: Response,
   message: string,
@@ -88,10 +97,18 @@ type ReadReceipt = {
 
 type MessageLike = {
   _id: unknown;
+  chatId?: unknown;
   sender: string;
+  text?: string;
+  image?: { url: string; publicId: string };
+  call?: unknown;
+  messageType?: "text" | "image" | "call";
   readBy?: ReadReceipt[];
   seen?: boolean;
   seenAt?: Date | null;
+  editedAt?: Date | null;
+  deletedAt?: Date | null;
+  createdAt?: Date;
   toObject?: () => Record<string, unknown>;
 };
 
@@ -154,6 +171,88 @@ const buildUnreadMessageQuery = (chatId: unknown, userId: string) => ({
   readBy: { $not: { $elemMatch: { userId } } },
 });
 
+const escapeRegExp = (value: string) =>
+  value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const includesSearchQuery = (value: unknown, normalizedQuery: string) => {
+  return (
+    typeof value === "string" &&
+    value.toLocaleLowerCase().includes(normalizedQuery)
+  );
+};
+
+const ensureMessageOwnerInChat = (
+  res: Response,
+  chat: { users: string[] } | null,
+  message: MessageLike,
+  userId: string,
+): chat is { users: string[]; latestMessage?: { text: string; sender: string } | null } => {
+  if (!chat) {
+    respondNotFound(res, "Chat");
+    return false;
+  }
+
+  if (!isChatParticipant(chat, userId)) {
+    respondForbidden(res);
+    return false;
+  }
+
+  if (message.sender.toString() !== userId) {
+    respondForbidden(res, "Only the sender can change this message");
+    return false;
+  }
+
+  return true;
+};
+
+const isGroupChat = (chat: { chatType?: string }) => chat.chatType === "group";
+
+const isChatParticipant = (
+  chat: { users: string[] },
+  userId: string,
+): boolean => {
+  return chat.users.some(
+    (participantId) => participantId.toString() === userId.toString(),
+  );
+};
+
+const isGroupAdmin = (
+  chat: { groupAdmins?: string[] },
+  userId: string,
+): boolean => {
+  return Boolean(
+    chat.groupAdmins?.some((adminId) => adminId.toString() === userId),
+  );
+};
+
+const ensureGroupChatAdmin = (
+  res: Response,
+  chat: { chatType?: string; users: string[]; groupAdmins?: string[] } | null,
+  userId: string,
+): chat is { chatType: "group"; users: string[]; groupAdmins?: string[] } => {
+  if (!chat) {
+    respondNotFound(res, "Chat");
+    return false;
+  }
+
+  if (!isGroupChat(chat)) {
+    respondError(res, 422, "Only group chats support member management");
+    return false;
+  }
+
+  if (!isChatParticipant(chat, userId)) {
+    respondForbidden(res);
+    return false;
+  }
+
+  if (!isGroupAdmin(chat, userId)) {
+    respondForbidden(res, "Only group admins can manage members");
+    return false;
+  }
+
+  return true;
+};
+
 export const createNewChat = TryCatch(
   async (req: ChatRequest, res: Response) => {
     const userId = req.user?._id;
@@ -182,6 +281,7 @@ export const createNewChat = TryCatch(
       const newChat = await Chat.create({
         chatType: "group",
         users: participantIds,
+        groupAdmins: [userId.toString()],
         groupName: payload.groupName,
         groupAvatar: payload.groupAvatar,
       });
@@ -233,6 +333,273 @@ export const createNewChat = TryCatch(
   },
 );
 
+export const addGroupMember = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { chatId } = req.params as { chatId: string };
+    const { memberId } = req.body as { memberId: string };
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!ensureGroupChatAdmin(res, chat, userId.toString())) {
+      return;
+    }
+
+    if (isChatParticipant(chat, memberId)) {
+      respondError(res, 409, "User is already a group member");
+      return;
+    }
+
+    const member = await UserSnapshot.findById(memberId);
+    if (!member) {
+      respondNotFound(res, "Group member");
+      return;
+    }
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      {
+        users: [...chat.users, memberId],
+        updatedAt: new Date(),
+      },
+      { new: true },
+    );
+
+    io.to(chatId).emit("group:memberAdded", {
+      chatId,
+      member,
+      addedBy: userId.toString(),
+    });
+    io.to(memberId).emit("group:memberAdded", {
+      chatId,
+      member,
+      addedBy: userId.toString(),
+    });
+
+    respondSuccess(res, "Group member added", { chat: updatedChat });
+  },
+);
+
+export const removeGroupMember = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { chatId, memberId } = req.params as {
+      chatId: string;
+      memberId: string;
+    };
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!ensureGroupChatAdmin(res, chat, userId.toString())) {
+      return;
+    }
+
+    if (!isChatParticipant(chat, memberId)) {
+      respondNotFound(res, "Group member");
+      return;
+    }
+
+    if (memberId === userId.toString()) {
+      respondError(res, 422, "Use leave group to remove yourself");
+      return;
+    }
+
+    const nextUsers = chat.users.filter(
+      (participantId) => participantId.toString() !== memberId,
+    );
+    const nextGroupAdmins = (chat.groupAdmins ?? []).filter(
+      (adminId) => adminId.toString() !== memberId,
+    );
+
+    if (nextUsers.length === 0) {
+      respondError(res, 422, "Group must contain at least one member");
+      return;
+    }
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      {
+        users: nextUsers,
+        groupAdmins: nextGroupAdmins,
+        updatedAt: new Date(),
+      },
+      { new: true },
+    );
+
+    io.to(chatId).emit("group:memberRemoved", {
+      chatId,
+      memberId,
+      removedBy: userId.toString(),
+    });
+    io.to(memberId).emit("group:memberRemoved", {
+      chatId,
+      memberId,
+      removedBy: userId.toString(),
+    });
+
+    respondSuccess(res, "Group member removed", { chat: updatedChat });
+  },
+);
+
+export const leaveGroupChat = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { chatId } = req.params as { chatId: string };
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!chat) {
+      respondNotFound(res, "Chat");
+      return;
+    }
+
+    if (!isGroupChat(chat)) {
+      respondError(res, 422, "Only group chats can be left");
+      return;
+    }
+
+    if (!isChatParticipant(chat, userId.toString())) {
+      respondForbidden(res);
+      return;
+    }
+
+    const nextUsers = chat.users.filter(
+      (participantId) => participantId.toString() !== userId.toString(),
+    );
+
+    if (nextUsers.length === 0) {
+      respondError(res, 422, "Group must contain at least one member");
+      return;
+    }
+
+    const remainingAdmins = (chat.groupAdmins ?? []).filter((adminId) =>
+      nextUsers.includes(adminId.toString()),
+    );
+    const nextGroupAdmins =
+      remainingAdmins.length > 0 ? remainingAdmins : [nextUsers[0]];
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      {
+        users: nextUsers,
+        groupAdmins: nextGroupAdmins,
+        updatedAt: new Date(),
+      },
+      { new: true },
+    );
+
+    io.to(chatId).emit("group:memberLeft", {
+      chatId,
+      memberId: userId.toString(),
+      promotedAdminId:
+        remainingAdmins.length === 0 ? nextGroupAdmins[0] : undefined,
+    });
+    io.to(userId.toString()).emit("group:memberLeft", {
+      chatId,
+      memberId: userId.toString(),
+    });
+
+    respondSuccess(res, "Left group chat", { chat: updatedChat });
+  },
+);
+
+export const updateGroupMetadata = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { chatId } = req.params as { chatId: string };
+    const { groupName, groupAvatar } = req.body as UpdateGroupMetadataBody;
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!ensureGroupChatAdmin(res, chat, userId.toString())) {
+      return;
+    }
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (groupName !== undefined) {
+      update.groupName = groupName;
+    }
+    if (groupAvatar !== undefined) {
+      update.groupAvatar = groupAvatar;
+    }
+
+    const updatedChat = await Chat.findByIdAndUpdate(chatId, update, {
+      new: true,
+    });
+
+    io.to(chatId).emit("group:updated", {
+      chatId,
+      groupName,
+      groupAvatar,
+      updatedBy: userId.toString(),
+    });
+
+    respondSuccess(res, "Group chat updated", { chat: updatedChat });
+  },
+);
+
+export const uploadGroupAvatar = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { chatId } = req.params as { chatId: string };
+    const avatarFile = req.file;
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const chat = await Chat.findById(chatId);
+    if (!ensureGroupChatAdmin(res, chat, userId.toString())) {
+      return;
+    }
+
+    const avatarUrl =
+      avatarFile?.path ||
+      avatarFile?.secure_url ||
+      avatarFile?.url ||
+      avatarFile?.uploadInfo?.secure_url;
+
+    if (!avatarUrl) {
+      respondError(res, 422, "Group avatar image is required");
+      return;
+    }
+
+    const updatedChat = await Chat.findByIdAndUpdate(
+      chatId,
+      {
+        groupAvatar: avatarUrl,
+        updatedAt: new Date(),
+      },
+      { new: true },
+    );
+
+    io.to(chatId).emit("group:updated", {
+      chatId,
+      groupAvatar: avatarUrl,
+      updatedBy: userId.toString(),
+    });
+
+    respondSuccess(res, "Group avatar uploaded", { chat: updatedChat });
+  },
+);
+
 export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
   const userId = req.user?._id;
   if (!userId) {
@@ -262,6 +629,92 @@ export const getAllChats = TryCatch(async (req: ChatRequest, res: Response) => {
 
   respondSuccess(res, "Chats fetched", { chats: chatsWithParticipants });
 });
+
+export const searchChatsAndMessages = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const rawQuery = typeof req.query.q === "string" ? req.query.q.trim() : "";
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    if (!rawQuery) {
+      respondError(res, 422, "Search query is required");
+      return;
+    }
+
+    const normalizedQuery = rawQuery.toLocaleLowerCase();
+    const chats = await Chat.find({ users: userId.toString() }).sort({
+      updatedAt: -1,
+    });
+
+    const chatResults = await Promise.all(
+      chats.map(async (chat: (typeof chats)[number]) => {
+        const participants = await getChatParticipants(chat.users);
+        const chatObject = {
+          ...chat.toObject(),
+          latestMessage: chat.latestMessage || null,
+        };
+
+        return {
+          participants,
+          chat: chatObject,
+          matches:
+            includesSearchQuery(chat.groupName, normalizedQuery) ||
+            includesSearchQuery(chat.latestMessage?.text, normalizedQuery) ||
+            participants.some(
+              (participant) =>
+                includesSearchQuery(participant.name, normalizedQuery) ||
+                includesSearchQuery(participant.email, normalizedQuery),
+            ),
+        };
+      }),
+    );
+
+    const chatIds = chats.map((chat: (typeof chats)[number]) =>
+      String(chat._id),
+    );
+    const chatsById = new Map(
+      chatResults.map((result) => [String(result.chat._id), result]),
+    );
+    const messageQuery = new RegExp(escapeRegExp(rawQuery), "i");
+    const messages =
+      chatIds.length > 0
+        ? await Messages.find({
+            chatId: { $in: chatIds },
+            text: messageQuery,
+          }).sort({ createdAt: -1 })
+        : [];
+
+    const messageResults = messages
+      .map((message: MessageLike) => {
+        const chatId = message.chatId?.toString() ?? "";
+        const chatResult = chatsById.get(chatId);
+
+        if (!chatResult) {
+          return null;
+        }
+
+        return {
+          message: toClientMessage(message, chatResult.chat.users as string[]),
+          chat: chatResult.chat,
+          participants: chatResult.participants,
+        };
+      })
+      .filter((result): result is NonNullable<typeof result> =>
+        Boolean(result),
+      );
+
+    respondSuccess(res, "Search results fetched", {
+      chats: chatResults
+        .filter((result) => result.matches)
+        .map(({ matches: _matches, ...result }) => result),
+      messages: messageResults,
+    });
+  },
+);
 
 export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
   const senderId = req.user?._id;
@@ -381,6 +834,177 @@ export const sendMessage = TryCatch(async (req: ChatRequest, res: Response) => {
     201,
   );
 });
+
+const getLatestMessageText = (message: MessageLike) => {
+  if (message.deletedAt) {
+    return "Message deleted";
+  }
+
+  if (message.messageType === "image" || message.image) {
+    return "Image";
+  }
+
+  return message.text || "";
+};
+
+const shouldUpdateLatestMessage = (
+  chat: { latestMessage?: { text: string; sender: string } | null },
+  message: MessageLike,
+) => {
+  const latestMessage = chat.latestMessage;
+  return (
+    latestMessage?.sender?.toString() === message.sender.toString() &&
+    latestMessage.text === getLatestMessageText(message)
+  );
+};
+
+export const updateMessage = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { messageId } = req.params as { messageId: string };
+    const { text } = req.body as UpdateMessageBody;
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const message = await Messages.findById(messageId);
+    if (!message) {
+      respondNotFound(res, "Message");
+      return;
+    }
+
+    if (message.deletedAt) {
+      respondError(res, 422, "Deleted messages cannot be edited");
+      return;
+    }
+
+    if (message.messageType === "call") {
+      respondError(res, 422, "Call messages cannot be edited");
+      return;
+    }
+
+    const chat = await Chat.findById(message.chatId);
+    if (!ensureMessageOwnerInChat(res, chat, message, userId.toString())) {
+      return;
+    }
+
+    const editedAt = new Date();
+    const syncLatestMessage = shouldUpdateLatestMessage(chat, message);
+    const updatedMessage = await Messages.findByIdAndUpdate(
+      messageId,
+      {
+        $set: {
+          text,
+          editedAt,
+          updatedAt: editedAt,
+        },
+      },
+      { new: true },
+    );
+
+    if (!updatedMessage) {
+      respondNotFound(res, "Message");
+      return;
+    }
+
+    if (syncLatestMessage) {
+      await Chat.findByIdAndUpdate(
+        chat._id,
+        {
+          latestMessage: { text, sender: userId.toString() },
+          updatedAt: editedAt,
+        },
+        { new: true },
+      );
+    }
+
+    const clientMessage = toClientMessage(updatedMessage, chat.users);
+
+    io.to(message.chatId.toString()).emit("messageUpdated", clientMessage);
+    chat.users.forEach((participantId) => {
+      io.to(participantId.toString()).emit("messageUpdated", clientMessage);
+    });
+
+    respondSuccess(res, "Message updated", { message: clientMessage });
+  },
+);
+
+export const deleteMessage = TryCatch(
+  async (req: ChatRequest, res: Response) => {
+    const userId = req.user?._id;
+    const { messageId } = req.params as { messageId: string };
+
+    if (!userId) {
+      respondUnauthorized(res);
+      return;
+    }
+
+    const message = await Messages.findById(messageId);
+    if (!message) {
+      respondNotFound(res, "Message");
+      return;
+    }
+
+    if (message.deletedAt) {
+      respondError(res, 422, "Message is already deleted");
+      return;
+    }
+
+    const chat = await Chat.findById(message.chatId);
+    if (!ensureMessageOwnerInChat(res, chat, message, userId.toString())) {
+      return;
+    }
+
+    const deletedAt = new Date();
+    const syncLatestMessage = shouldUpdateLatestMessage(chat, message);
+    const updatedMessage = await Messages.findByIdAndUpdate(
+      messageId,
+      {
+        $set: {
+          text: "",
+          messageType: "text",
+          deletedAt,
+          updatedAt: deletedAt,
+        },
+        $unset: {
+          image: "",
+          call: "",
+        },
+      },
+      { new: true },
+    );
+
+    if (!updatedMessage) {
+      respondNotFound(res, "Message");
+      return;
+    }
+
+    if (syncLatestMessage) {
+      await Chat.findByIdAndUpdate(
+        chat._id,
+        {
+          latestMessage: {
+            text: "Message deleted",
+            sender: userId.toString(),
+          },
+          updatedAt: deletedAt,
+        },
+        { new: true },
+      );
+    }
+
+    const clientMessage = toClientMessage(updatedMessage, chat.users);
+
+    io.to(message.chatId.toString()).emit("messageDeleted", clientMessage);
+    chat.users.forEach((participantId) => {
+      io.to(participantId.toString()).emit("messageDeleted", clientMessage);
+    });
+
+    respondSuccess(res, "Message deleted", { message: clientMessage });
+  },
+);
 
 export const getMessageByChat = TryCatch(
   async (req: ChatRequest, res: Response) => {

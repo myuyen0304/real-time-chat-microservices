@@ -45,3 +45,16 @@ export const parseMessageUpload = (
 
   upload.single("image")(req, res, next);
 };
+
+export const parseGroupAvatarUpload = (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
+  if (!req.is("multipart/form-data")) {
+    next();
+    return;
+  }
+
+  upload.single("avatar")(req, res, next);
+};

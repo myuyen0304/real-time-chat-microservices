@@ -5,6 +5,7 @@ export type ChatType = "direct" | "group";
 export interface IChat extends Document {
   chatType: ChatType;
   users: string[];
+  groupAdmins: string[];
   groupName?: string;
   groupAvatar?: string;
   latestMessage?: {
@@ -24,6 +25,10 @@ const schema: Schema<IChat> = new Schema(
       required: true,
     },
     users: [{ type: String, required: true }],
+    groupAdmins: {
+      type: [{ type: String, required: true }],
+      default: [],
+    },
     groupName: {
       type: String,
       trim: true,

@@ -51,6 +51,7 @@ const testState = vi.hoisted(() => {
     _id: string;
     chatType: "direct" | "group";
     users: string[];
+    groupAdmins: string[];
     groupName?: string;
     groupAvatar?: string;
     latestMessage?: { text: string; sender: string } | null;
@@ -62,12 +63,16 @@ const testState = vi.hoisted(() => {
     chatId: string;
     sender: string;
     text?: string;
-    messageType: "text" | "image";
+    messageType: "text" | "image" | "call";
     readBy: Array<{ userId: string; readAt: Date }>;
     seen: boolean;
     seenAt?: Date;
     image?: { url: string; publicId: string };
+    call?: unknown;
+    editedAt?: Date | null;
+    deletedAt?: Date | null;
     createdAt: Date;
+    updatedAt: Date;
   };
 
   const chats = new Map<string, StoredChat>();
@@ -93,6 +98,14 @@ const testState = vi.hoisted(() => {
         return actual !== expected.$ne;
       }
 
+      if (isObject(expected) && Array.isArray(expected.$in)) {
+        return expected.$in.includes(actual);
+      }
+
+      if (expected instanceof RegExp) {
+        return typeof actual === "string" && expected.test(actual);
+      }
+
       if (
         key === "readBy" &&
         isObject(expected) &&
@@ -116,6 +129,7 @@ const testState = vi.hoisted(() => {
     _id,
     chatType = "direct",
     users,
+    groupAdmins = [],
     groupName,
     groupAvatar,
     latestMessage = null,
@@ -124,6 +138,7 @@ const testState = vi.hoisted(() => {
     _id?: string;
     chatType?: "direct" | "group";
     users: string[];
+    groupAdmins?: string[];
     groupName?: string;
     groupAvatar?: string;
     latestMessage?: { text: string; sender: string } | null;
@@ -134,6 +149,7 @@ const testState = vi.hoisted(() => {
       _id: chatId,
       chatType,
       users,
+      groupAdmins,
       groupName,
       groupAvatar,
       latestMessage,
@@ -142,6 +158,7 @@ const testState = vi.hoisted(() => {
         _id: chatId,
         chatType,
         users: [...users],
+        groupAdmins: [...groupAdmins],
         groupName,
         groupAvatar,
         latestMessage,
@@ -162,8 +179,12 @@ const testState = vi.hoisted(() => {
     seen = false,
     seenAt,
     image,
+    call,
+    editedAt = null,
+    deletedAt = null,
     messageType = "text",
     createdAt = new Date("2026-01-01T00:00:00.000Z"),
+    updatedAt = createdAt,
   }: {
     _id?: string;
     chatId: string;
@@ -173,8 +194,12 @@ const testState = vi.hoisted(() => {
     seen?: boolean;
     seenAt?: Date;
     image?: { url: string; publicId: string };
-    messageType?: "text" | "image";
+    call?: unknown;
+    editedAt?: Date | null;
+    deletedAt?: Date | null;
+    messageType?: "text" | "image" | "call";
     createdAt?: Date;
+    updatedAt?: Date;
   }) => {
     const messageId = _id ?? `${nextMessageId++}`.padStart(24, "0");
     const message: StoredMessage = {
@@ -186,8 +211,12 @@ const testState = vi.hoisted(() => {
       seen,
       seenAt,
       image,
+      call,
+      editedAt,
+      deletedAt,
       messageType,
       createdAt,
+      updatedAt,
     };
     messages.set(messageId, message);
     return message;
@@ -232,15 +261,23 @@ const testState = vi.hoisted(() => {
       async ({
         chatType = "direct",
         users,
+        groupAdmins,
         groupName,
         groupAvatar,
       }: {
         chatType?: "direct" | "group";
         users: string[];
+        groupAdmins?: string[];
         groupName?: string;
         groupAvatar?: string;
       }) => {
-        return buildChat({ chatType, users, groupName, groupAvatar });
+        return buildChat({
+          chatType,
+          users,
+          groupAdmins,
+          groupName,
+          groupAvatar,
+        });
       },
     ),
     findById: vi.fn(async (id: string) => chats.get(String(id)) ?? null),
@@ -248,12 +285,28 @@ const testState = vi.hoisted(() => {
       async (
         id: string,
         update: {
+          users?: string[];
+          groupAdmins?: string[];
+          groupName?: string;
+          groupAvatar?: string;
           latestMessage?: { text: string; sender: string };
           updatedAt?: Date;
         },
       ) => {
         const chat = chats.get(String(id));
         if (!chat) return null;
+        if (update.users) {
+          chat.users = update.users;
+        }
+        if (update.groupAdmins) {
+          chat.groupAdmins = update.groupAdmins;
+        }
+        if (update.groupName !== undefined) {
+          chat.groupName = update.groupName;
+        }
+        if (update.groupAvatar !== undefined) {
+          chat.groupAvatar = update.groupAvatar;
+        }
         if (update.latestMessage) {
           chat.latestMessage = update.latestMessage;
         }
@@ -294,6 +347,8 @@ const testState = vi.hoisted(() => {
       data: Record<string, unknown>,
     ): StoredMessage & { save: () => Promise<StoredMessage> };
     find: ReturnType<typeof vi.fn>;
+    findById: ReturnType<typeof vi.fn>;
+    findByIdAndUpdate: ReturnType<typeof vi.fn>;
     updateMany: ReturnType<typeof vi.fn>;
     countDocuments: ReturnType<typeof vi.fn>;
   };
@@ -322,6 +377,36 @@ const testState = vi.hoisted(() => {
       map: typeof filtered.map;
     };
   });
+
+  Messages.findById = vi.fn(async (id: string) => messages.get(String(id)) ?? null);
+
+  Messages.findByIdAndUpdate = vi.fn(
+    async (
+      id: string,
+      update: Record<string, unknown>,
+      _options?: Record<string, unknown>,
+    ) => {
+      const message = messages.get(String(id));
+      if (!message) return null;
+
+      if ("$set" in update && isObject(update.$set)) {
+        Object.assign(message, update.$set);
+      }
+
+      if ("$unset" in update && isObject(update.$unset)) {
+        Object.keys(update.$unset).forEach((key) => {
+          delete (message as unknown as Record<string, unknown>)[key];
+        });
+      }
+
+      if (!("$set" in update) && !("$unset" in update)) {
+        Object.assign(message, update);
+      }
+
+      messages.set(message._id, message);
+      return message;
+    },
+  );
 
   Messages.updateMany = vi.fn(
     async (query: Record<string, unknown>, update: Record<string, unknown>) => {
@@ -444,6 +529,8 @@ const testState = vi.hoisted(() => {
     Chat.findByIdAndUpdate.mockClear();
     Chat.find.mockClear();
     Messages.find.mockClear();
+    Messages.findById.mockClear();
+    Messages.findByIdAndUpdate.mockClear();
     Messages.updateMany.mockClear();
     Messages.countDocuments.mockClear();
     UserSnapshot.findById.mockClear();
@@ -514,6 +601,18 @@ vi.mock("../src/middleware/multer.js", async () => {
       _res: express.Response,
       next: express.NextFunction,
     ) => next(),
+    parseGroupAvatarUpload: (
+      req: express.Request & { file?: { path?: string } },
+      _res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      const avatarUrl =
+        typeof req.body?.avatarUrl === "string" ? req.body.avatarUrl : "";
+      if (avatarUrl) {
+        req.file = { path: avatarUrl };
+      }
+      next();
+    },
   };
 });
 
@@ -619,8 +718,265 @@ describe("chat service routes", () => {
     expect(testState.Chat.create).toHaveBeenCalledWith({
       chatType: "group",
       users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupAdmins: [loggedInUser._id],
       groupName: "Project Squad",
       groupAvatar: "https://example.com/group.png",
+    });
+  });
+
+  it("allows a group admin to add a member", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439081",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .post(`/api/v1/chat/${groupChat._id}/members`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({ memberId: outsider._id });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Group member added",
+      chat: {
+        _id: groupChat._id,
+        users: [loggedInUser._id, otherUser._id, outsider._id],
+        groupAdmins: [loggedInUser._id],
+      },
+    });
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: groupChat._id,
+          event: "group:memberAdded",
+        }),
+        expect.objectContaining({
+          target: outsider._id,
+          event: "group:memberAdded",
+        }),
+      ]),
+    );
+  });
+
+  it("forbids a non-admin from adding a group member", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439082",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .post(`/api/v1/chat/${groupChat._id}/members`)
+      .set("Authorization", `Bearer ${signToken(otherUser)}`)
+      .send({ memberId: outsider._id });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Only group admins can manage members",
+    });
+    expect(testState.Chat.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a group admin to remove a member", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439083",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupAdmins: [loggedInUser._id, outsider._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .delete(`/api/v1/chat/${groupChat._id}/members/${outsider._id}`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Group member removed",
+      chat: {
+        _id: groupChat._id,
+        users: [loggedInUser._id, otherUser._id],
+        groupAdmins: [loggedInUser._id],
+      },
+    });
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: groupChat._id,
+          event: "group:memberRemoved",
+        }),
+        expect.objectContaining({
+          target: outsider._id,
+          event: "group:memberRemoved",
+        }),
+      ]),
+    );
+  });
+
+  it("lets a member leave and promotes a new admin when needed", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439084",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .post(`/api/v1/chat/${groupChat._id}/leave`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Left group chat",
+      chat: {
+        _id: groupChat._id,
+        users: [otherUser._id],
+        groupAdmins: [otherUser._id],
+      },
+    });
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: groupChat._id,
+          event: "group:memberLeft",
+          payload: expect.objectContaining({
+            promotedAdminId: otherUser._id,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("allows a group admin to edit group metadata", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439085",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+      groupAvatar: "https://example.com/old.png",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/chat/${groupChat._id}/group`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({
+        groupName: "Product Squad",
+        groupAvatar: "https://example.com/new.png",
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Group chat updated",
+      chat: {
+        _id: groupChat._id,
+        groupName: "Product Squad",
+        groupAvatar: "https://example.com/new.png",
+      },
+    });
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: groupChat._id,
+          event: "group:updated",
+          payload: expect.objectContaining({
+            groupName: "Product Squad",
+            groupAvatar: "https://example.com/new.png",
+            updatedBy: loggedInUser._id,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("forbids a non-admin from editing group metadata", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439086",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/chat/${groupChat._id}/group`)
+      .set("Authorization", `Bearer ${signToken(otherUser)}`)
+      .send({ groupName: "Not Allowed" });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Only group admins can manage members",
+    });
+    expect(testState.Chat.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("allows a group admin to upload a group avatar", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439087",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/chat/${groupChat._id}/avatar`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({ avatarUrl: "https://cdn.example.com/group-avatar.png" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Group avatar uploaded",
+      chat: {
+        _id: groupChat._id,
+        groupAvatar: "https://cdn.example.com/group-avatar.png",
+      },
+    });
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          target: groupChat._id,
+          event: "group:updated",
+          payload: expect.objectContaining({
+            groupAvatar: "https://cdn.example.com/group-avatar.png",
+            updatedBy: loggedInUser._id,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("requires an avatar image when uploading a group avatar", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439088",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/chat/${groupChat._id}/avatar`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({});
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Group avatar image is required",
     });
   });
 
@@ -665,6 +1021,122 @@ describe("chat service routes", () => {
     );
   });
 
+  it("allows the sender to edit a message", async () => {
+    const chat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439091",
+      users: [loggedInUser._id, otherUser._id],
+      latestMessage: { text: "Original text", sender: loggedInUser._id },
+    });
+    const message = testState.buildMessage({
+      _id: "507f1f77bcf86cd799439092",
+      chatId: chat._id,
+      sender: loggedInUser._id,
+      text: "Original text",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/message/${message._id}`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({ text: "Updated text" });
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.message).toMatchObject({
+      _id: message._id,
+      text: "Updated text",
+      editedAt: expect.any(String),
+    });
+    expect(testState.Chat.findByIdAndUpdate).toHaveBeenCalledWith(
+      chat._id,
+      {
+        latestMessage: { text: "Updated text", sender: loggedInUser._id },
+        updatedAt: expect.any(Date),
+      },
+      { new: true },
+    );
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: chat._id, event: "messageUpdated" }),
+        expect.objectContaining({
+          target: otherUser._id,
+          event: "messageUpdated",
+        }),
+      ]),
+    );
+  });
+
+  it("forbids editing another sender's message", async () => {
+    const chat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439093",
+      users: [loggedInUser._id, otherUser._id],
+    });
+    const message = testState.buildMessage({
+      _id: "507f1f77bcf86cd799439094",
+      chatId: chat._id,
+      sender: otherUser._id,
+      text: "Owned by Bob",
+    });
+
+    const response = await request(app)
+      .patch(`/api/v1/message/${message._id}`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({ text: "Not allowed" });
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Only the sender can change this message",
+    });
+    expect(testState.Messages.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it("soft deletes a sender's message", async () => {
+    const chat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439095",
+      users: [loggedInUser._id, otherUser._id],
+      latestMessage: { text: "Remove me", sender: loggedInUser._id },
+    });
+    const message = testState.buildMessage({
+      _id: "507f1f77bcf86cd799439096",
+      chatId: chat._id,
+      sender: loggedInUser._id,
+      text: "Remove me",
+    });
+
+    const response = await request(app)
+      .delete(`/api/v1/message/${message._id}`)
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.message).toMatchObject({
+      _id: message._id,
+      text: "",
+      messageType: "text",
+      deletedAt: expect.any(String),
+    });
+    expect(testState.Chat.findByIdAndUpdate).toHaveBeenCalledWith(
+      chat._id,
+      {
+        latestMessage: {
+          text: "Message deleted",
+          sender: loggedInUser._id,
+        },
+        updatedAt: expect.any(Date),
+      },
+      { new: true },
+    );
+    expect(testState.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ target: chat._id, event: "messageDeleted" }),
+        expect.objectContaining({
+          target: otherUser._id,
+          event: "messageDeleted",
+        }),
+      ]),
+    );
+  });
+
   it("returns chats with explicit participants for direct and group chats", async () => {
     testState.buildChat({
       _id: "507f1f77bcf86cd799439032",
@@ -676,6 +1148,7 @@ describe("chat service routes", () => {
       _id: "507f1f77bcf86cd799439033",
       chatType: "group",
       users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupAdmins: [loggedInUser._id],
       groupName: "Project Squad",
       groupAvatar: "https://example.com/group.png",
       latestMessage: { text: "Latest group", sender: outsider._id },
@@ -703,6 +1176,7 @@ describe("chat service routes", () => {
           chat: expect.objectContaining({
             _id: "507f1f77bcf86cd799439033",
             chatType: "group",
+            groupAdmins: [loggedInUser._id],
             groupName: "Project Squad",
             groupAvatar: "https://example.com/group.png",
             latestMessage: { text: "Latest group", sender: outsider._id },
@@ -715,6 +1189,104 @@ describe("chat service routes", () => {
         }),
       ]),
     );
+  });
+
+  it("searches only chats and messages visible to the current participant", async () => {
+    const visibleGroupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439034",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id, outsider._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+      latestMessage: { text: "Planning notes", sender: otherUser._id },
+      updatedAt: new Date("2026-01-01T00:05:00.000Z"),
+    });
+    const visibleDirectChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439035",
+      users: [loggedInUser._id, otherUser._id],
+      latestMessage: { text: "Nothing matched here", sender: otherUser._id },
+    });
+    const hiddenChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439036",
+      users: [otherUser._id, outsider._id],
+      latestMessage: { text: "Project secret", sender: outsider._id },
+    });
+
+    testState.buildMessage({
+      _id: "507f1f77bcf86cd799439037",
+      chatId: visibleDirectChat._id,
+      sender: otherUser._id,
+      text: "Project deadline is tomorrow",
+      createdAt: new Date("2026-01-01T00:06:00.000Z"),
+    });
+    testState.buildMessage({
+      _id: "507f1f77bcf86cd799439038",
+      chatId: hiddenChat._id,
+      sender: outsider._id,
+      text: "Project message outside Alice chats",
+      createdAt: new Date("2026-01-01T00:07:00.000Z"),
+    });
+
+    const response = await request(app)
+      .get("/api/v1/chat/search")
+      .query({ q: "project" })
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      success: true,
+      message: "Search results fetched",
+    });
+    expect(response.body.chats).toHaveLength(1);
+    expect(response.body.chats[0]).toMatchObject({
+      chat: {
+        _id: visibleGroupChat._id,
+        chatType: "group",
+        groupName: "Project Squad",
+      },
+      participants: expect.arrayContaining([
+        loggedInUser,
+        otherUser,
+        outsider,
+      ]),
+    });
+    expect(response.body.messages).toHaveLength(1);
+    expect(response.body.messages[0]).toMatchObject({
+      message: {
+        _id: "507f1f77bcf86cd799439037",
+        chatId: visibleDirectChat._id,
+        text: "Project deadline is tomorrow",
+      },
+      chat: {
+        _id: visibleDirectChat._id,
+      },
+      participants: expect.arrayContaining([loggedInUser, otherUser]),
+    });
+    expect(
+      response.body.messages.some(
+        (result: { chat: { _id: string } }) => result.chat._id === hiddenChat._id,
+      ),
+    ).toBe(false);
+  });
+
+  it("validates search queries", async () => {
+    const response = await request(app)
+      .get("/api/v1/chat/search")
+      .query({ q: "   " })
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`);
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Validation failed",
+      errors: [
+        {
+          field: "q",
+          location: "query",
+          message: "Search query is required",
+        },
+      ],
+    });
   });
 
   it("fetches messages for a participant and marks unseen messages as seen", async () => {

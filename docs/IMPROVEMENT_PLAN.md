@@ -22,18 +22,18 @@ Use this checklist as the project backlog for production readiness. When startin
 ## P2 - Scalability
 
 - [x] Store presence and user-to-socket mapping in Redis so multiple chat-service instances stay consistent.
-- [ ] Verify Socket.IO rooms, typing, message, read receipt, and call events across multiple chat-service replicas.
-- [ ] Review chat-service memory maps and move cross-instance state to Redis or another shared store.
-- [ ] Add load-test notes for concurrent socket connections and message throughput.
+- [x] Verify Socket.IO rooms, typing, message, read receipt, and call events across multiple chat-service replicas.
+- [x] Review chat-service memory maps and move cross-instance state to Redis or another shared store.
+- [x] Add load-test notes for concurrent socket connections and message throughput.
 
 ## P3 - Product Features
 
-- [ ] Add group chat admin roles.
-- [ ] Add group member management: add member, remove member, leave group.
-- [ ] Add edit group name and avatar.
-- [ ] Support uploading a group avatar instead of only accepting an avatar URL.
-- [ ] Add chat and message search.
-- [ ] Add edit/delete message flows if needed by the product scope.
+- [x] Add group chat admin roles.
+- [x] Add group member management: add member, remove member, leave group.
+- [x] Add edit group name and avatar.
+- [x] Support uploading a group avatar instead of only accepting an avatar URL.
+- [x] Add chat and message search.
+- [x] Add edit/delete message flows if needed by the product scope.
 
 ## P4 - Engineering Quality
 

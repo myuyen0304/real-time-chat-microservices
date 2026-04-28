@@ -1,12 +1,23 @@
 import express from "express";
 import isAuth from "../middleware/isAuth.js";
 import {
+  addGroupMember,
   createNewChat,
+  deleteMessage,
   getAllChats,
   getMessageByChat,
+  leaveGroupChat,
+  removeGroupMember,
+  searchChatsAndMessages,
   sendMessage,
+  updateMessage,
+  updateGroupMetadata,
+  uploadGroupAvatar,
 } from "../controller/chat.js";
-import { parseMessageUpload } from "../middleware/multer.js";
+import {
+  parseGroupAvatarUpload,
+  parseMessageUpload,
+} from "../middleware/multer.js";
 import {
   type RequestValidator,
   validateBodyMongoId,
@@ -196,6 +207,151 @@ const validateCreateChatPayload: RequestValidator = (req) => {
   return [];
 };
 
+const validateGroupMetadataPayload: RequestValidator = (req) => {
+  const request = req as typeof req & {
+    body: {
+      groupName?: unknown;
+      groupAvatar?: unknown;
+    };
+  };
+  const errors = [] as ReturnType<RequestValidator>;
+  const hasGroupName = request.body.groupName !== undefined;
+  const hasGroupAvatar = request.body.groupAvatar !== undefined;
+
+  if (!hasGroupName && !hasGroupAvatar) {
+    errors.push({
+      field: "groupName",
+      location: "body",
+      message: "Group name or group avatar is required",
+    });
+    return errors;
+  }
+
+  if (hasGroupName) {
+    if (typeof request.body.groupName !== "string") {
+      errors.push({
+        field: "groupName",
+        location: "body",
+        message: "Group name must be a string",
+      });
+    } else {
+      request.body.groupName = request.body.groupName.trim();
+      if (!request.body.groupName) {
+        errors.push({
+          field: "groupName",
+          location: "body",
+          message: "Group name cannot be empty",
+        });
+      }
+    }
+  }
+
+  if (hasGroupAvatar) {
+    if (typeof request.body.groupAvatar !== "string") {
+      errors.push({
+        field: "groupAvatar",
+        location: "body",
+        message: "Group avatar must be a string",
+      });
+    } else {
+      request.body.groupAvatar = request.body.groupAvatar.trim();
+      if (request.body.groupAvatar) {
+        try {
+          const parsed = new URL(request.body.groupAvatar);
+          if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+            errors.push({
+              field: "groupAvatar",
+              location: "body",
+              message: "Group avatar must be an HTTP or HTTPS URL",
+            });
+          }
+        } catch {
+          errors.push({
+            field: "groupAvatar",
+            location: "body",
+            message: "Group avatar must be a valid URL",
+          });
+        }
+      }
+    }
+  }
+
+  return errors;
+};
+
+const validateSearchQuery: RequestValidator = (req) => {
+  const request = req as typeof req & {
+    query: {
+      q?: unknown;
+    };
+  };
+
+  if (typeof request.query.q !== "string") {
+    return [
+      {
+        field: "q",
+        location: "query",
+        message: "Search query is required",
+      },
+    ];
+  }
+
+  const query = request.query.q.trim();
+  request.query.q = query;
+  if (!query) {
+    return [
+      {
+        field: "q",
+        location: "query",
+        message: "Search query is required",
+      },
+    ];
+  }
+
+  if (query.length > 100) {
+    return [
+      {
+        field: "q",
+        location: "query",
+        message: "Search query must be at most 100 characters",
+      },
+    ];
+  }
+
+  return [];
+};
+
+const validateMessageUpdatePayload: RequestValidator = (req) => {
+  const request = req as typeof req & {
+    body: {
+      text?: unknown;
+    };
+  };
+
+  if (typeof request.body.text !== "string") {
+    return [
+      {
+        field: "text",
+        location: "body",
+        message: "Text is required",
+      },
+    ];
+  }
+
+  request.body.text = request.body.text.trim();
+  if (!request.body.text) {
+    return [
+      {
+        field: "text",
+        location: "body",
+        message: "Text is required",
+      },
+    ];
+  }
+
+  return [];
+};
+
 router.post(
   "/chat/new",
   isAuth,
@@ -203,6 +359,52 @@ router.post(
   createNewChat,
 );
 router.get("/chat/all", isAuth, getAllChats);
+router.get(
+  "/chat/search",
+  isAuth,
+  validateRequest(validateSearchQuery),
+  searchChatsAndMessages,
+);
+router.post(
+  "/chat/:chatId/members",
+  isAuth,
+  validateRequest(
+    validateParamMongoId("chatId", "Chat id"),
+    validateBodyMongoId("memberId", "Member id"),
+  ),
+  addGroupMember,
+);
+router.delete(
+  "/chat/:chatId/members/:memberId",
+  isAuth,
+  validateRequest(
+    validateParamMongoId("chatId", "Chat id"),
+    validateParamMongoId("memberId", "Member id"),
+  ),
+  removeGroupMember,
+);
+router.post(
+  "/chat/:chatId/leave",
+  isAuth,
+  validateRequest(validateParamMongoId("chatId", "Chat id")),
+  leaveGroupChat,
+);
+router.patch(
+  "/chat/:chatId/group",
+  isAuth,
+  validateRequest(
+    validateParamMongoId("chatId", "Chat id"),
+    validateGroupMetadataPayload,
+  ),
+  updateGroupMetadata,
+);
+router.patch(
+  "/chat/:chatId/avatar",
+  isAuth,
+  parseGroupAvatarUpload,
+  validateRequest(validateParamMongoId("chatId", "Chat id")),
+  uploadGroupAvatar,
+);
 router.post(
   "/message",
   isAuth,
@@ -213,6 +415,21 @@ router.post(
     validateTextOrImage("text"),
   ),
   sendMessage,
+);
+router.patch(
+  "/message/:messageId",
+  isAuth,
+  validateRequest(
+    validateParamMongoId("messageId", "Message id"),
+    validateMessageUpdatePayload,
+  ),
+  updateMessage,
+);
+router.delete(
+  "/message/:messageId",
+  isAuth,
+  validateRequest(validateParamMongoId("messageId", "Message id")),
+  deleteMessage,
 );
 router.get(
   "/message/:chatId",
