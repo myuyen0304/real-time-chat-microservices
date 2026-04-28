@@ -19,4 +19,15 @@ const connectDB = async () => {
   }
 };
 
+export const getMongoHealth = () => ({
+  status: mongoose.connection.readyState === 1 ? "up" : "down",
+  readyState: mongoose.connection.readyState,
+});
+
+export const disconnectDB = async () => {
+  if (mongoose.connection.readyState !== 0) {
+    await mongoose.disconnect();
+  }
+};
+
 export default connectDB;
