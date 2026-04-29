@@ -724,6 +724,87 @@ describe("chat service routes", () => {
     });
   });
 
+  it("validates group chat creation payloads", async () => {
+    const response = await request(app)
+      .post("/api/v1/chat/new")
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({
+        chatType: "group",
+        groupName: "   ",
+        groupAvatar: "ftp://example.com/group.png",
+        userIds: ["not-a-mongo-id"],
+      });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Validation failed",
+      errors: expect.arrayContaining([
+        {
+          field: "groupName",
+          location: "body",
+          message: "Group name is required",
+        },
+        {
+          field: "groupAvatar",
+          location: "body",
+          message: "Group avatar must be an HTTP or HTTPS URL",
+        },
+        {
+          field: "userIds[0]",
+          location: "body",
+          message: "Each user id must be a valid MongoDB id",
+        },
+      ]),
+    });
+    expect(testState.Chat.create).not.toHaveBeenCalled();
+  });
+
+  it("requires group chats to include another participant", async () => {
+    const response = await request(app)
+      .post("/api/v1/chat/new")
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({
+        chatType: "group",
+        groupName: "Solo Group",
+        userIds: [loggedInUser._id],
+      });
+
+    expect(response.status).toBe(422);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Validation failed",
+      errors: [
+        {
+          field: "userIds",
+          location: "body",
+          message: "Group chats must include at least one other user",
+        },
+      ],
+    });
+    expect(testState.Chat.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects group creation when a participant snapshot is missing", async () => {
+    const missingUserId = "507f1f77bcf86cd799439014";
+
+    const response = await request(app)
+      .post("/api/v1/chat/new")
+      .set("Authorization", `Bearer ${signToken(loggedInUser)}`)
+      .send({
+        chatType: "group",
+        groupName: "Project Squad",
+        userIds: [otherUser._id, missingUserId],
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body).toEqual({
+      success: false,
+      message: "Group member not found",
+    });
+    expect(testState.Chat.create).not.toHaveBeenCalled();
+  });
+
   it("allows a group admin to add a member", async () => {
     const groupChat = testState.buildChat({
       _id: "507f1f77bcf86cd799439081",
@@ -855,6 +936,27 @@ describe("chat service routes", () => {
         }),
       ]),
     );
+  });
+
+  it("forbids a non-participant from leaving a group chat", async () => {
+    const groupChat = testState.buildChat({
+      _id: "507f1f77bcf86cd799439089",
+      chatType: "group",
+      users: [loggedInUser._id, otherUser._id],
+      groupAdmins: [loggedInUser._id],
+      groupName: "Project Squad",
+    });
+
+    const response = await request(app)
+      .post(`/api/v1/chat/${groupChat._id}/leave`)
+      .set("Authorization", `Bearer ${signToken(outsider)}`);
+
+    expect(response.status).toBe(403);
+    expect(response.body).toEqual({
+      success: false,
+      message: "You are not a participant",
+    });
+    expect(testState.Chat.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 
   it("allows a group admin to edit group metadata", async () => {

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const rabbitMqState = vi.hoisted(() => {
   type TestMessage = {
@@ -81,6 +81,13 @@ describe("chat user event consumer", () => {
   beforeEach(() => {
     rabbitMqState.reset();
     snapshots.findByIdAndUpdate.mockClear();
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("upserts the UserSnapshot when a user.upserted event is consumed", async () => {
