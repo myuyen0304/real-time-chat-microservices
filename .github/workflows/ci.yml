@@ -118,6 +118,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Prepare compose env files
+        run: |
+          cp backend/user/.env.example backend/user/.env
+          cp backend/chat/.env.example backend/chat/.env
+          cp backend/mail/.env.example backend/mail/.env
+
       - name: Validate local compose
         run: docker compose config --quiet
 
