@@ -89,7 +89,7 @@ jobs:
         run: npm test
 
   mail-service:
-    name: Mail service build
+    name: Mail service build and test
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -110,6 +110,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
   compose:
     name: Docker Compose config
