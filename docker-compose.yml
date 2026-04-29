@@ -49,6 +49,7 @@ services:
       - Rabbitmq_Password=${RABBITMQ_DEFAULT_PASS:-guest}
       - MONGO_DB_NAME=chat_user_service
       - MONGO_URI=mongodb://mongo:27017/chat_app
+      - REDIS_URL=redis://redis:6379
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -84,6 +85,7 @@ services:
       - Rabbitmq_Password=${RABBITMQ_DEFAULT_PASS:-guest}
       - MONGO_DB_NAME=chat_chat_service
       - MONGO_URI=mongodb://mongo:27017/chat_app
+      - REDIS_URL=redis://redis:6379
       - USER_SERVICE=http://user-service:5000
     depends_on:
       rabbitmq:

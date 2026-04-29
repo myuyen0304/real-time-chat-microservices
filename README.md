@@ -181,6 +181,8 @@ MONGO_DB_NAME=chat_user_service
 REDIS_URL=redis://localhost:6379
 JWT_PRIVATE_KEY=<run: node scripts/generate-keys.mjs>
 JWT_PUBLIC_KEY=<run: node scripts/generate-keys.mjs>
+JWT_ISSUER=chat-app-auth
+JWT_AUDIENCE=chat-app-clients
 Rabbitmq_Host=localhost
 Rabbitmq_Username=guest
 Rabbitmq_Password=guest
@@ -195,8 +197,11 @@ PORT=5002
 REDIS_URL=redis://localhost:6379
 MONGO_URI=mongodb://localhost:27017/chat_app
 MONGO_DB_NAME=chat_chat_service
+CALL_RING_TIMEOUT_SECONDS=30
 USER_SERVICE=http://localhost:5000
 JWT_PUBLIC_KEY=<run: node scripts/generate-keys.mjs>
+JWT_ISSUER=chat-app-auth
+JWT_AUDIENCE=chat-app-clients
 Rabbitmq_Host=localhost
 Rabbitmq_Username=guest
 Rabbitmq_Password=guest
@@ -212,9 +217,9 @@ API_SECRET=your_cloudinary_api_secret
 ```env
 PORT=5001
 EMAIL_HOST=smtp.gmail.com
-EMAIL_PORT=587
+EMAIL_PORT=465
 EMAIL_USER=your_email@gmail.com
-EMAIL_PASSWORD=your_app_password
+EMAIL_PASSWORD=your_gmail_app_password
 Rabbitmq_Host=localhost
 Rabbitmq_Username=guest
 Rabbitmq_Password=guest
@@ -223,17 +228,26 @@ Rabbitmq_Password=guest
 ### frontend/.env.local
 
 ```env
+NEXT_PUBLIC_GATEWAY_URL=http://localhost:80
+NEXT_PUBLIC_WEBRTC_ICE_SERVERS=[{"urls":["stun:stun.l.google.com:19302"]}]
+```
+
+Neu can goi truc tiep tung service thay vi qua nginx gateway, co the dat:
+
+```env
 NEXT_PUBLIC_USER_SERVICE_URL=http://localhost:5000
 NEXT_PUBLIC_CHAT_SERVICE_URL=http://localhost:5002
 ```
 
-Neu chay qua nginx gateway thay vi goi truc tiep tung service, dat:
+## Chạy bằng Docker Compose
 
-```env
-NEXT_PUBLIC_GATEWAY_URL=http://localhost:80
+Lan dau clone repo, tao cac file env local va JWT key pair:
+
+```bash
+node scripts/setup-local-env.mjs
 ```
 
-## Chạy bằng Docker Compose
+Script nay tao `backend/user/.env`, `backend/chat/.env`, `backend/mail/.env`, va `frontend/.env.local` tu cac file `.env.example`. Neu file `.env` da ton tai, script se bo qua de tranh ghi de cau hinh local cua ban.
 
 ```bash
 docker compose up --build
@@ -308,7 +322,7 @@ Không chạy `docker system prune --volumes` nếu bạn còn cần dữ liệu
 
 GitHub Actions có 2 workflow:
 
-- `.github/workflows/ci.yml`: chạy khi push `main`, pull request, hoặc chạy thủ công. Workflow này lint/build frontend, build/test user-service, build/test chat-service, build mail-service, và validate Docker Compose local/prod.
+- `.github/workflows/ci.yml`: chạy khi push `main`, pull request, hoặc chạy thủ công. Workflow này lint/build frontend, build/test user-service, build/test chat-service, build/test mail-service, và validate Docker Compose local/prod.
 - `.github/workflows/deploy-prod.yml`: deploy thủ công qua `workflow_dispatch`, SSH vào server, pull `main`, validate `docker-compose.prod.yml`, rồi chạy `docker compose -f docker-compose.prod.yml up -d --build`.
 
 Để dùng deploy workflow, cấu hình GitHub Environment `production` và các secrets sau:
